@@ -83,6 +83,85 @@ async function startServer() {
     next();
   });
 
+  app.use(express.json({ limit: '128kb' }));
+
+  // Persistent per-student progress & profile store (.data/progress.json)
+  interface ProgressEntry {
+    solved: boolean;
+    stars: number;
+    attempts: number;
+  }
+  interface StoredStudentRecord {
+    accountKey: string;
+    profile: {
+      name: string;
+      school: string;
+      studentClass: string;
+      email: string;
+    };
+    progress: Record<string, ProgressEntry>;
+    updatedAt: number;
+  }
+
+  const dataDir = path.resolve(import.meta.dirname, '.data');
+  const progressFilePath = path.join(dataDir, 'progress.json');
+  const progressStore = new Map<string, StoredStudentRecord>();
+
+  try {
+    if (fs.existsSync(progressFilePath)) {
+      const raw = fs.readFileSync(progressFilePath, 'utf-8');
+      const parsed = JSON.parse(raw) as Record<string, StoredStudentRecord>;
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v && v.accountKey && v.profile && v.progress) {
+            progressStore.set(k, v);
+          }
+        }
+      }
+    }
+  } catch {
+    // Start fresh if file unreadable
+  }
+
+  const flushProgressToDisk = () => {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      const obj: Record<string, StoredStudentRecord> = {};
+      for (const [k, v] of progressStore.entries()) {
+        obj[k] = v;
+      }
+      fs.writeFileSync(progressFilePath, JSON.stringify(obj), 'utf-8');
+    } catch (err) {
+      console.error('Failed to persist student progress:', err);
+    }
+  };
+
+  const mergeProgressRecords = (
+    a: Record<string, ProgressEntry>,
+    b: Record<string, ProgressEntry>
+  ): Record<string, ProgressEntry> => {
+    const merged: Record<string, ProgressEntry> = { ...a };
+    for (const [qId, entryB] of Object.entries(b)) {
+      const qNum = Number(qId);
+      if (!Number.isInteger(qNum) || qNum < 1 || qNum > 55 || !entryB) continue;
+      const entryA = merged[qId];
+      if (!entryA) {
+        merged[qId] = {
+          solved: Boolean(entryB.solved),
+          stars: Math.max(0, Math.min(3, Number(entryB.stars) || 0)),
+          attempts: Math.max(0, Math.min(999, Number(entryB.attempts) || 0)),
+        };
+      } else {
+        merged[qId] = {
+          solved: Boolean(entryA.solved || entryB.solved),
+          stars: Math.max(entryA.stars || 0, Math.min(3, Number(entryB.stars) || 0)),
+          attempts: Math.max(entryA.attempts || 0, Math.min(999, Number(entryB.attempts) || 0)),
+        };
+      }
+    }
+    return merged;
+  };
+
   // Authoritative in-memory world state for the single shared city map
   const players = new Map<string, OnlinePlayerState>();
   const sessions = new Map<string, ClientSession>();
@@ -112,6 +191,51 @@ async function startServer() {
       onlinePlayers: players.size,
       timestamp: Date.now(),
     });
+  });
+
+  app.get('/api/progress', (req, res) => {
+    const key = typeof req.query.key === 'string' ? req.query.key.trim().toLowerCase().slice(0, 160) : '';
+    if (!key) {
+      res.status(400).json({ found: false, error: 'Missing key' });
+      return;
+    }
+    const existing = progressStore.get(key);
+    if (!existing) {
+      res.json({ found: false });
+      return;
+    }
+    res.json({ found: true, record: existing });
+  });
+
+  app.post('/api/progress', (req, res) => {
+    const body = req.body as Partial<StoredStudentRecord> | undefined;
+    const rawKey = typeof body?.accountKey === 'string' ? body.accountKey.trim().toLowerCase().slice(0, 160) : '';
+    if (!rawKey) {
+      res.status(400).json({ ok: false, error: 'Invalid accountKey' });
+      return;
+    }
+    const existing = progressStore.get(rawKey);
+    const incomingProfile = body?.profile;
+    const mergedProfile = {
+      name: sanitizeText(incomingProfile?.name, 40, existing?.profile.name || 'Siswa'),
+      school: sanitizeText(incomingProfile?.school, 50, existing?.profile.school || ''),
+      studentClass: sanitizeText(incomingProfile?.studentClass, 16, existing?.profile.studentClass || ''),
+      email: sanitizeText(incomingProfile?.email, 80, existing?.profile.email || ''),
+    };
+    const incomingProgress =
+      body?.progress && typeof body.progress === 'object'
+        ? (body.progress as Record<string, ProgressEntry>)
+        : {};
+    const mergedProgress = mergeProgressRecords(existing?.progress || {}, incomingProgress);
+    const updated: StoredStudentRecord = {
+      accountKey: rawKey,
+      profile: mergedProfile,
+      progress: mergedProgress,
+      updatedAt: Date.now(),
+    };
+    progressStore.set(rawKey, updated);
+    flushProgressToDisk();
+    res.json({ ok: true, record: updated });
   });
 
   const wss = new WebSocketServer({ server, path: '/ws/city' });

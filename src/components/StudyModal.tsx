@@ -122,8 +122,11 @@ export default function StudyModal({
       if (res?.accessToken) {
         setNeedsGoogleAuth(false);
       }
-    } catch {
-      setUploadError('Gagal menghubungkan akun Google browsermu. Silakan izinkan popup lalu coba lagi.');
+    } catch (err: any) {
+      setUploadError(
+        err?.message ||
+          'Gagal menghubungkan akun Google browsermu. Silakan izinkan popup lalu coba lagi.'
+      );
     } finally {
       setIsSigningInDrive(false);
     }

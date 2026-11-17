@@ -3,11 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ThreeCity from './components/ThreeCity';
 import WelcomeModal from './components/WelcomeModal';
 import StudyModal from './components/StudyModal';
-import { logoutGoogle, TEACHER_EMAIL } from './services/googleDriveService';
+import {
+  buildAccountKey,
+  clearActiveSessionMeta,
+  getAccessToken,
+  googleSignIn,
+  loadActiveSessionProfile,
+  loadBestStudentRecord,
+  loadLocalStudentRecord,
+  logoutGoogle,
+  mergeStudentProgress,
+  saveActiveSessionMeta,
+  SavedStudentRecord,
+  StudentProgressMap,
+  subscribeFirebaseUser,
+  syncStudentRecordAll,
+  TEACHER_EMAIL,
+  wasExplicitlyLoggedOut,
+} from './services/googleDriveService';
 import { ambientMusic } from './services/ambientMusicService';
 import { multiplayerService } from './services/multiplayerService';
 import {
@@ -37,21 +54,19 @@ function checkIsMobileViewport(): boolean {
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
-  const [studentName, setStudentName] = useState<string>('Maulana Karim');
-  const [studentSchool, setStudentSchool] = useState<string>('SMPN 1 Kota');
-  const [studentClass, setStudentClass] = useState<string>('9A');
-  const [studentEmail, setStudentEmail] = useState<string>('maulanakarim9502@gmail.com');
+  const [studentName, setStudentName] = useState<string>('');
+  const [studentSchool, setStudentSchool] = useState<string>('');
+  const [studentClass, setStudentClass] = useState<string>('');
+  const [studentEmail, setStudentEmail] = useState<string>('');
 
-  const [userProgress, setUserProgress] = useState<
-    Record<number, { solved: boolean; stars: number; attempts: number }>
-  >({});
+  const [userProgress, setUserProgress] = useState<StudentProgressMap>({});
   const [activeChapterId, setActiveChapterId] = useState<number | null>(null);
   const [kickedChapterId, setKickedChapterId] = useState<number | null>(null);
   const [isVoiceMuted, setIsVoiceMuted] = useState<boolean>(false);
   const [isMusicEnabled, setIsMusicEnabled] = useState<boolean>(true);
   const [isMobileLayout, setIsMobileLayout] = useState<boolean>(() => checkIsMobileViewport());
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [saveToast, setSaveToast] = useState<boolean>(false);
+  const [saveToastMsg, setSaveToastMsg] = useState<string>('');
   const [teacherModalOpen, setTeacherModalOpen] = useState<boolean>(false);
   const [teacherFolderValue, setTeacherFolderValue] = useState<string>(() => {
     try {
@@ -60,6 +75,9 @@ export default function App() {
       return '';
     }
   });
+  const syncTimerRef = useRef<number | null>(null);
+  const isLoggedInRef = useRef<boolean>(false);
+  isLoggedInRef.current = isLoggedIn;
 
   useEffect(() => {
     const onResize = () => setIsMobileLayout(checkIsMobileViewport());
@@ -84,25 +102,70 @@ export default function App() {
     }
   };
 
-  // Load from localStorage
+  // Auto-restore active student session or browser-authenticated Google account on mount
   useEffect(() => {
-    try {
-      const savedUser = localStorage.getItem('tka_smp_roblox_user');
-      if (savedUser) {
-        const data = JSON.parse(savedUser);
-        setStudentName(data.name || 'Siswa');
-        setStudentSchool(data.school || 'SMPN 1 Kota');
-        setStudentClass(data.studentClass || '9A');
-        setStudentEmail(data.email || '');
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      const activeProf = loadActiveSessionProfile();
+      if (activeProf) {
+        const key = buildAccountKey(
+          activeProf.email,
+          activeProf.name,
+          activeProf.school,
+          activeProf.studentClass
+        );
+        const localRec = loadLocalStudentRecord(key);
+        if (!cancelled) {
+          setStudentName(activeProf.name);
+          setStudentSchool(activeProf.school);
+          setStudentClass(activeProf.studentClass);
+          setStudentEmail(activeProf.email);
+          if (localRec?.progress) {
+            setUserProgress(localRec.progress);
+          }
+          setIsLoggedIn(true);
+        }
+        const best = await loadBestStudentRecord(key, activeProf.email, activeProf);
+        if (!cancelled && best) {
+          setUserProgress((prev) => mergeStudentProgress(prev, best.progress));
+        }
+        return;
+      }
+    };
+
+    restoreSession();
+
+    // Also auto-login automatically if browser Google session is persisted (and user didn't click Keluar)
+    const unsubAuth = subscribeFirebaseUser(async (fbUser) => {
+      if (cancelled || isLoggedInRef.current) return;
+      if (!fbUser?.email || wasExplicitlyLoggedOut()) return;
+
+      const gEmail = fbUser.email;
+      const gName = fbUser.displayName || 'Siswa';
+      const key = buildAccountKey(gEmail, gName, '', '');
+      const best = await loadBestStudentRecord(key, gEmail, {
+        name: gName,
+        school: '',
+        studentClass: '',
+        email: gEmail,
+      });
+
+      if (!cancelled && best && best.profile.name && best.profile.school && best.profile.studentClass) {
+        setStudentName(best.profile.name);
+        setStudentSchool(best.profile.school);
+        setStudentClass(best.profile.studentClass);
+        setStudentEmail(best.profile.email || gEmail);
+        setUserProgress(best.progress || {});
+        saveActiveSessionMeta(best);
         setIsLoggedIn(true);
       }
-      const savedProg = localStorage.getItem('tka_smp_roblox_progress');
-      if (savedProg) {
-        setUserProgress(JSON.parse(savedProg));
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubAuth();
+    };
   }, []);
 
   // Auto-start peaceful copyright-free background music on first user gesture
@@ -133,14 +196,40 @@ export default function App() {
     };
   }, []);
 
-  // Save to localStorage
+  // Automatically save per-student progress to localStorage, server cloud, & Google Drive
   useEffect(() => {
-    try {
-      localStorage.setItem('tka_smp_roblox_progress', JSON.stringify(userProgress));
-    } catch (e) {
-      console.error(e);
+    if (!isLoggedIn || !studentName) return;
+    const key = buildAccountKey(studentEmail, studentName, studentSchool, studentClass);
+    const record: SavedStudentRecord = {
+      accountKey: key,
+      profile: {
+        name: studentName,
+        school: studentSchool,
+        studentClass,
+        email: studentEmail,
+      },
+      progress: userProgress,
+      updatedAt: Date.now(),
+    };
+
+    saveActiveSessionMeta(record);
+
+    if (syncTimerRef.current !== null) {
+      clearTimeout(syncTimerRef.current);
     }
-  }, [userProgress]);
+    syncTimerRef.current = window.setTimeout(() => {
+      syncStudentRecordAll(record, {
+        syncDrive: true,
+        teacherFolderInput: teacherFolderValue,
+      });
+    }, 650);
+
+    return () => {
+      if (syncTimerRef.current !== null) {
+        clearTimeout(syncTimerRef.current);
+      }
+    };
+  }, [userProgress, isLoggedIn, studentName, studentSchool, studentClass, studentEmail, teacherFolderValue]);
 
   const toggleMusic = () => {
     if (isMusicEnabled) {
@@ -164,21 +253,57 @@ export default function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-  const handleLoginSuccess = (name: string, school: string, studentClassVal: string, email: string) => {
+  const handleLoginSuccess = async (
+    name: string,
+    school: string,
+    studentClassVal: string,
+    email: string,
+    restoredProgress?: StudentProgressMap
+  ) => {
+    const key = buildAccountKey(email, name, school, studentClassVal);
+    const localRec = loadLocalStudentRecord(key);
+    let initialProgress = mergeStudentProgress(restoredProgress, localRec?.progress);
+
     setStudentName(name);
     setStudentSchool(school);
     setStudentClass(studentClassVal);
     setStudentEmail(email);
+    setUserProgress(initialProgress);
     setIsLoggedIn(true);
-    localStorage.setItem(
-      'tka_smp_roblox_user',
-      JSON.stringify({ name, school, studentClass: studentClassVal, email })
-    );
+
+    const record: SavedStudentRecord = {
+      accountKey: key,
+      profile: {
+        name,
+        school,
+        studentClass: studentClassVal,
+        email,
+      },
+      progress: initialProgress,
+      updatedAt: Date.now(),
+    };
+    saveActiveSessionMeta(record);
+
     if (isMusicEnabled) {
       ambientMusic.start();
     }
     speakText(
       `Selamat datang di kota petualangan Roblox TKA Matematika SMP, ${name} dari kelas ${studentClassVal} ${school}! Jelajahi ke-11 gedung bab dan selesaikan misinya.`
+    );
+
+    // Ensure server + Google Drive stay synchronized in background
+    const best = await loadBestStudentRecord(key, email, record.profile);
+    if (best) {
+      initialProgress = mergeStudentProgress(initialProgress, best.progress);
+      setUserProgress(initialProgress);
+    }
+    syncStudentRecordAll(
+      {
+        ...record,
+        progress: initialProgress,
+        updatedAt: Date.now(),
+      },
+      { syncDrive: true, teacherFolderInput: teacherFolderValue }
     );
   };
 
@@ -194,26 +319,92 @@ export default function App() {
   const isTeacherAccount = isLoggedIn && studentEmail.toLowerCase() === TEACHER_EMAIL.toLowerCase();
 
   const handleLogout = async () => {
+    if (isLoggedIn && studentName) {
+      const key = buildAccountKey(studentEmail, studentName, studentSchool, studentClass);
+      await syncStudentRecordAll(
+        {
+          accountKey: key,
+          profile: {
+            name: studentName,
+            school: studentSchool,
+            studentClass,
+            email: studentEmail,
+          },
+          progress: userProgress,
+          updatedAt: Date.now(),
+        },
+        { syncDrive: true, teacherFolderInput: teacherFolderValue }
+      );
+    }
+
     multiplayerService.disconnect();
+    clearActiveSessionMeta();
     setIsLoggedIn(false);
     setActiveChapterId(null);
-    localStorage.removeItem('tka_smp_roblox_user');
+    setKickedChapterId(null);
+    setUserProgress({});
+    setStudentName('');
+    setStudentSchool('');
+    setStudentClass('');
+    setStudentEmail('');
     try {
       await logoutGoogle();
     } catch {
       // ignore if Firebase user was not signed in
     }
-    speakText('Anda telah keluar dari akun.');
+    speakText('Anda telah keluar dari akun. Progres belajarmu sudah tersimpan.');
   };
 
-  const handleSaveToGoogle = () => {
+  const handleSaveToGoogle = async () => {
+    if (!studentName) return;
     try {
-      localStorage.setItem('tka_smp_roblox_progress', JSON.stringify(userProgress));
-      setSaveToast(true);
-      speakText(
-        'Progres belajar dan dekorasi gedung kota Anda berhasil disinkronkan dan disimpan ke akun Google!'
+      let currentEmail = studentEmail;
+      let token = await getAccessToken();
+
+      // If student hasn't linked Google Drive token in this session yet, trigger browser Google Sign-In
+      if (!token) {
+        try {
+          const res = await googleSignIn();
+          if (res?.user?.email) {
+            currentEmail = res.user.email;
+            setStudentEmail(currentEmail);
+            token = res.accessToken;
+          }
+        } catch {
+          // Continue saving to server cloud & local browser storage even if Drive popup cancelled
+        }
+      }
+
+      const key = buildAccountKey(currentEmail, studentName, studentSchool, studentClass);
+      const record: SavedStudentRecord = {
+        accountKey: key,
+        profile: {
+          name: studentName,
+          school: studentSchool,
+          studentClass,
+          email: currentEmail,
+        },
+        progress: userProgress,
+        updatedAt: Date.now(),
+      };
+
+      saveActiveSessionMeta(record);
+      const syncRes = await syncStudentRecordAll(record, {
+        syncDrive: Boolean(token),
+        teacherFolderInput: teacherFolderValue,
+      });
+
+      setSaveToastMsg(
+        syncRes.driveSynced
+          ? `Tersimpan di Google Drive (${currentEmail}) & Arsip Guru!`
+          : `Progres Disimpan di Cloud & Browser (${currentEmail || studentName})!`
       );
-      setTimeout(() => setSaveToast(false), 3500);
+      speakText(
+        syncRes.driveSynced
+          ? 'Progres belajar dan dekorasi gedung berhasil disimpan ke Google Drive siswa dan Google Drive guru!'
+          : 'Progres belajar dan dekorasi gedung kota Anda berhasil disinkronkan dan disimpan!'
+      );
+      setTimeout(() => setSaveToastMsg(''), 4000);
     } catch (e) {
       console.error(e);
     }
@@ -449,12 +640,10 @@ export default function App() {
       )}
 
       {/* SUCCESS TOAST FOR GOOGLE SAVE */}
-      {saveToast && (
+      {saveToastMsg && (
         <div className="absolute top-14 sm:top-20 right-4 sm:right-6 bg-emerald-600 text-white px-4 py-2.5 rounded-2xl shadow-2xl border border-emerald-400 z-50 flex items-center space-x-2.5">
           <CheckCircle2 className="w-4 h-4 text-yellow-300 shrink-0" />
-          <div className="text-[11px] sm:text-xs font-bold">
-            Progres Disimpan ({studentEmail})!
-          </div>
+          <div className="text-[11px] sm:text-xs font-bold">{saveToastMsg}</div>
         </div>
       )}
 
