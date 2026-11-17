@@ -26,7 +26,10 @@ import {
   Moon,
   Sunrise,
   Clock,
+  Users,
+  X,
 } from 'lucide-react';
+import { multiplayerService, OnlinePlayerState } from '../services/multiplayerService';
 
 type TimeMode = 'auto' | 'day' | 'night';
 type DayPhase = 'day' | 'sunset' | 'night';
@@ -44,6 +47,10 @@ interface ThreeCityProps {
   userProgress: Record<number, { solved: boolean; stars: number; attempts: number }>;
   kickedChapterId?: number | null;
   isMobileLayout?: boolean;
+  playerName?: string;
+  playerLevel?: number;
+  solvedQuestions?: number;
+  completedChapters?: number;
   onSelectChapter: (chapterId: number) => void;
   speakText: (text: string) => void;
 }
@@ -175,24 +182,76 @@ function createBuildingSignTexture(
   return tex;
 }
 
-// Helper: create floating NPC nametag texture
-function createNameTagTexture(name: string): THREE.CanvasTexture {
+// Helper: create floating real-player nametag + completion level badge texture
+function createPlayerNameTagTexture(opts: {
+  name: string;
+  level: number;
+  completedChapters: number;
+  solvedQuestions: number;
+  activeChapterId?: number | null;
+  isSelf?: boolean;
+}): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
+  canvas.width = 420;
+  canvas.height = 120;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+
+  const borderColor = opts.isSelf
+    ? '#34d399'
+    : opts.level >= 8
+      ? '#facc15'
+      : '#60a5fa';
+
+  // Card background
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
   ctx.beginPath();
-  ctx.roundRect(16, 8, 224, 48, 20);
+  ctx.roundRect(8, 8, 404, 104, 22);
   ctx.fill();
-  ctx.strokeStyle = '#60a5fa';
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 5;
   ctx.stroke();
 
+  // Top row: Player Name (+ optional active chapter indicator)
+  const cleanName = (opts.name || 'Siswa').trim();
+  const maxNameChars = opts.activeChapterId ? 15 : 21;
+  const displayName =
+    cleanName.length > maxNameChars ? `${cleanName.slice(0, maxNameChars - 1)}…` : cleanName;
+
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 26px sans-serif';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = opts.activeChapterId ? 'left' : 'center';
+  ctx.fillText(displayName, opts.activeChapterId ? 24 : 210, 48);
+
+  if (opts.activeChapterId) {
+    ctx.fillStyle = '#6366f1';
+    ctx.beginPath();
+    ctx.roundRect(306, 20, 92, 34, 12);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Bab ${opts.activeChapterId}`, 352, 44);
+  }
+
+  // Bottom row: Level Badge + Completion Stats
+  ctx.fillStyle = opts.level >= 8 ? '#facc15' : '#38bdf8';
+  ctx.beginPath();
+  ctx.roundRect(24, 66, 86, 34, 12);
+  ctx.fill();
+
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '900 21px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(name, 128, 41);
+  ctx.fillText(`Lv.${opts.level}`, 67, 90);
+
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(
+    `${opts.completedChapters}/11 Bab • ${opts.solvedQuestions}/55 Soal`,
+    122,
+    90
+  );
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -203,6 +262,10 @@ export default function ThreeCity({
   userProgress,
   kickedChapterId = null,
   isMobileLayout = false,
+  playerName = 'Siswa',
+  playerLevel = 1,
+  solvedQuestions = 0,
+  completedChapters = 0,
   onSelectChapter,
   speakText,
 }: ThreeCityProps) {
@@ -215,6 +278,12 @@ export default function ThreeCity({
   const lastAnnouncedChapterRef = useRef<number | null>(null);
   const speakTextRef = useRef(speakText);
   speakTextRef.current = speakText;
+
+  const localTagSpriteRef = useRef<THREE.Sprite | null>(null);
+  const [onlinePlayers, setOnlinePlayers] = useState<OnlinePlayerState[]>([]);
+  const [selfPlayerId, setSelfPlayerId] = useState<string | null>(null);
+  const [isOnlineConnected, setIsOnlineConnected] = useState<boolean>(false);
+  const [showOnlineList, setShowOnlineList] = useState<boolean>(false);
 
   const [nearbyChapter, setNearbyChapter] = useState<ChapterModule | null>(null);
   const [playerMiniPos, setPlayerMiniPos] = useState<{ x: number; z: number; yaw: number }>({
@@ -231,6 +300,30 @@ export default function ThreeCity({
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   });
   const [currentPhase, setCurrentPhase] = useState<DayPhase>(() => computePhase('auto', new Date()));
+
+  useEffect(() => {
+    return multiplayerService.subscribeSync((snap) => {
+      setIsOnlineConnected(snap.connected);
+      setSelfPlayerId(snap.selfId);
+      setOnlinePlayers(snap.players);
+    });
+  }, []);
+
+  useEffect(() => {
+    const sprite = localTagSpriteRef.current;
+    if (!sprite) return;
+    const mat = sprite.material as THREE.SpriteMaterial;
+    const oldTex = mat.map;
+    mat.map = createPlayerNameTagTexture({
+      name: playerName,
+      level: playerLevel,
+      completedChapters,
+      solvedQuestions,
+      isSelf: true,
+    });
+    mat.needsUpdate = true;
+    oldTex?.dispose();
+  }, [playerName, playerLevel, solvedQuestions, completedChapters]);
 
   useEffect(() => {
     const updateClock = () => {
@@ -1304,21 +1397,23 @@ export default function ThreeCity({
       }
     });
 
-    // --- MULTIPLAYER NPC ROBLOX STUDENTS WALKING ON SIDEWALKS ---
-    const npcNames = ['Raka', 'Siti', 'Bima', 'Nadia', 'Dimas', 'Putri'];
-    const npcColors = [0xef4444, 0xec4899, 0x8b5cf6, 0x06b6d4, 0xf97316, 0x10b981];
-    const npcs: {
+    // --- REAL-TIME MULTIPLAYER CONNECTED PLAYERS IN THE SHARED 1 MAP (NO FAKE NPCS) ---
+    interface RemoteAvatarEntry {
       group: THREE.Group;
       leftArm: THREE.Group;
       rightArm: THREE.Group;
       leftLeg: THREE.Group;
       rightLeg: THREE.Group;
-      route: { x: number; z: number }[];
-      segLengths: number[];
-      totalLength: number;
-      dist: number;
-      speed: number;
-    }[] = [];
+      tagSprite: THREE.Sprite;
+      targetX: number;
+      targetY: number;
+      targetZ: number;
+      targetYaw: number;
+      isMoving: boolean;
+      playerData: OnlinePlayerState;
+    }
+
+    const remoteAvatars = new Map<string, RemoteAvatarEntry>();
 
     const buildRobloxAvatar = (shirtColor: number, hairColor: number, faceTex: THREE.CanvasTexture) => {
       const avatar = new THREE.Group();
@@ -1406,6 +1501,23 @@ export default function ThreeCity({
       rightLeg: pRightLeg,
     } = buildRobloxAvatar(0x2563eb, 0x1e293b, sharedFaceTex);
 
+    const localTagSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: createPlayerNameTagTexture({
+          name: playerName,
+          level: playerLevel,
+          completedChapters,
+          solvedQuestions,
+          isSelf: true,
+        }),
+        transparent: true,
+      })
+    );
+    localTagSprite.scale.set(2.9, 0.83, 1);
+    localTagSprite.position.set(0, 3.65, 0);
+    playerGroup.add(localTagSprite);
+    localTagSpriteRef.current = localTagSprite;
+
     playerGroup.position.set(
       playerPosRef.current.x,
       getElevation(playerPosRef.current.x, playerPosRef.current.z) + 0.14,
@@ -1414,37 +1526,122 @@ export default function ThreeCity({
     playerGroup.rotation.y = playerPosRef.current.yaw;
     scene.add(playerGroup);
 
-    // Spawn 6 NPC classmates walking along city sidewalks
-    npcNames.forEach((name, idx) => {
-      const routeIds = VEHICLE_ROUTES[idx % VEHICLE_ROUTES.length];
-      const route = routeIds.map((nid) => ({ x: ROAD_NODES[nid].x, z: ROAD_NODES[nid].z }));
-      const segLengths = route.map((wp, i) => {
-        const nxt = route[(i + 1) % route.length];
-        return Math.hypot(nxt.x - wp.x, nxt.z - wp.z);
-      });
-      const totalLength = segLengths.reduce((s, v) => s + v, 0);
+    const upsertRemoteAvatar = (player: OnlinePlayerState) => {
+      const existing = remoteAvatars.get(player.id);
+      if (existing) {
+        existing.targetX = player.x;
+        existing.targetY = player.y;
+        existing.targetZ = player.z;
+        existing.targetYaw = player.yaw;
+        existing.isMoving = player.isMoving;
 
-      const npc = buildRobloxAvatar(npcColors[idx], 0x451a03, sharedFaceTex);
+        const prev = existing.playerData;
+        if (
+          prev.name !== player.name ||
+          prev.level !== player.level ||
+          prev.completedChapters !== player.completedChapters ||
+          prev.solvedQuestions !== player.solvedQuestions ||
+          prev.activeChapterId !== player.activeChapterId
+        ) {
+          const mat = existing.tagSprite.material as THREE.SpriteMaterial;
+          const oldTex = mat.map;
+          mat.map = createPlayerNameTagTexture({
+            name: player.name,
+            level: player.level,
+            completedChapters: player.completedChapters,
+            solvedQuestions: player.solvedQuestions,
+            activeChapterId: player.activeChapterId,
+          });
+          mat.needsUpdate = true;
+          oldTex?.dispose();
+        }
+        existing.playerData = { ...player };
+        return;
+      }
+
+      const avatarObj = buildRobloxAvatar(player.avatarColor || 0xef4444, 0x0f172a, sharedFaceTex);
       const tagSprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({ map: createNameTagTexture(name), transparent: true })
+        new THREE.SpriteMaterial({
+          map: createPlayerNameTagTexture({
+            name: player.name,
+            level: player.level,
+            completedChapters: player.completedChapters,
+            solvedQuestions: player.solvedQuestions,
+            activeChapterId: player.activeChapterId,
+          }),
+          transparent: true,
+        })
       );
-      tagSprite.scale.set(2.2, 0.55, 1);
-      tagSprite.position.set(0, 3.45, 0);
-      npc.avatar.add(tagSprite);
-      scene.add(npc.avatar);
+      tagSprite.scale.set(3.0, 0.86, 1);
+      tagSprite.position.set(0, 3.65, 0);
+      avatarObj.avatar.add(tagSprite);
 
-      npcs.push({
-        group: npc.avatar,
-        leftArm: npc.leftArm,
-        rightArm: npc.rightArm,
-        leftLeg: npc.leftLeg,
-        rightLeg: npc.rightLeg,
-        route,
-        segLengths,
-        totalLength,
-        dist: (totalLength / 6) * idx + 10,
-        speed: 0.055 + (idx % 3) * 0.01,
+      const startY = getElevation(player.x, player.z) + 0.14;
+      avatarObj.avatar.position.set(player.x, startY, player.z);
+      avatarObj.avatar.rotation.y = player.yaw;
+      scene.add(avatarObj.avatar);
+
+      remoteAvatars.set(player.id, {
+        group: avatarObj.avatar,
+        leftArm: avatarObj.leftArm,
+        rightArm: avatarObj.rightArm,
+        leftLeg: avatarObj.leftLeg,
+        rightLeg: avatarObj.rightLeg,
+        tagSprite,
+        targetX: player.x,
+        targetY: startY,
+        targetZ: player.z,
+        targetYaw: player.yaw,
+        isMoving: player.isMoving,
+        playerData: { ...player },
       });
+    };
+
+    const removeRemoteAvatar = (id: string) => {
+      const entry = remoteAvatars.get(id);
+      if (!entry) return;
+      scene.remove(entry.group);
+      const mat = entry.tagSprite.material as THREE.SpriteMaterial;
+      mat.map?.dispose();
+      mat.dispose();
+      remoteAvatars.delete(id);
+    };
+
+    // Hydrate currently connected remote players immediately on mount/rebuild
+    multiplayerService.getRemotePlayers().forEach((rp) => upsertRemoteAvatar(rp));
+
+    const unsubscribeDelta = multiplayerService.subscribeDelta((evt) => {
+      const myId = multiplayerService.getSnapshot().selfId;
+      if (evt.type === 'init') {
+        for (const existingId of Array.from(remoteAvatars.keys())) {
+          removeRemoteAvatar(existingId);
+        }
+        evt.players.forEach((p) => {
+          if (p.id !== evt.selfId) upsertRemoteAvatar(p);
+        });
+        return;
+      }
+      if (evt.type === 'joined' || evt.type === 'updated') {
+        if (evt.player.id !== myId) {
+          upsertRemoteAvatar(evt.player);
+        }
+        return;
+      }
+      if (evt.type === 'moved') {
+        if (evt.id === myId) return;
+        const entry = remoteAvatars.get(evt.id);
+        if (entry) {
+          entry.targetX = evt.x;
+          entry.targetY = evt.y;
+          entry.targetZ = evt.z;
+          entry.targetYaw = evt.yaw;
+          entry.isMoving = evt.isMoving;
+        }
+        return;
+      }
+      if (evt.type === 'left') {
+        removeRemoteAvatar(evt.id);
+      }
     });
 
     // --- HIGH-SENSITIVITY MULTI-TOUCH CAMERA ORBIT DRAG + KEYBOARD CONTROLS ---
@@ -1602,36 +1799,35 @@ export default function ThreeCity({
         });
       });
 
-      // 4. Move NPCs on sidewalks (5.3m offset from road center)
-      npcs.forEach((npc) => {
-        npc.dist = (npc.dist + npc.speed) % npc.totalLength;
-        let d = npc.dist;
-        for (let i = 0; i < npc.route.length; i++) {
-          const sl = npc.segLengths[i];
-          if (d <= sl || i === npc.route.length - 1) {
-            const a = npc.route[i];
-            const b = npc.route[(i + 1) % npc.route.length];
-            const t = sl > 0 ? d / sl : 0;
-            const dx = b.x - a.x;
-            const dz = b.z - a.z;
-            const len = Math.hypot(dx, dz) || 1;
-            const px = -dz / len;
-            const pz = dx / len;
-            const x = a.x + dx * t + px * 5.3;
-            const z = a.z + dz * t + pz * 5.3;
-            const y = getElevation(x, z) + 0.26;
-            npc.group.position.set(x, y, z);
-            npc.group.rotation.y = Math.atan2(dx, dz);
-            break;
-          }
-          d -= sl;
+      // 4. Smoothly Interpolate & Animate Real Remote Players in the Same World Map
+      const walkWave = Math.sin(Date.now() * 0.014) * 0.6;
+      for (const remote of remoteAvatars.values()) {
+        const dx = remote.targetX - remote.group.position.x;
+        const dz = remote.targetZ - remote.group.position.z;
+        const moveStep = Math.hypot(dx, dz);
+
+        remote.group.position.x += dx * 0.24;
+        remote.group.position.z += dz * 0.24;
+        const targetGroundY = getElevation(remote.group.position.x, remote.group.position.z) + 0.14;
+        remote.group.position.y += (targetGroundY - remote.group.position.y) * 0.28;
+
+        let yawDiff = remote.targetYaw - remote.group.rotation.y;
+        while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+        while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+        remote.group.rotation.y += yawDiff * 0.24;
+
+        if (remote.isMoving || moveStep > 0.04) {
+          remote.leftLeg.rotation.x = walkWave;
+          remote.rightLeg.rotation.x = -walkWave;
+          remote.leftArm.rotation.x = -walkWave * 0.85;
+          remote.rightArm.rotation.x = walkWave * 0.85;
+        } else {
+          remote.leftLeg.rotation.x *= 0.8;
+          remote.rightLeg.rotation.x *= 0.8;
+          remote.leftArm.rotation.x *= 0.8;
+          remote.rightArm.rotation.x *= 0.8;
         }
-        const walkSwing = Math.sin(Date.now() * 0.01) * 0.45;
-        npc.leftLeg.rotation.x = walkSwing;
-        npc.rightLeg.rotation.x = -walkSwing;
-        npc.leftArm.rotation.x = -walkSwing;
-        npc.rightArm.rotation.x = walkSwing;
-      });
+      }
 
       // 5. Smooth 360-degree Analog & WASD Input relative to camera yaw
       let inputX = 0;
@@ -1650,7 +1846,8 @@ export default function ThreeCity({
       if (keys['KeyE']) cameraYaw -= 0.045;
 
       const rawMag = Math.hypot(inputX, inputZ);
-      if (rawMag > 0.05) {
+      const isLocalMoving = rawMag > 0.05;
+      if (isLocalMoving) {
         const clampedMag = Math.min(1, rawMag);
         const nx = inputX / rawMag;
         const nz = inputZ / rawMag;
@@ -1694,6 +1891,15 @@ export default function ThreeCity({
         z: playerGroup.position.z,
         yaw: playerGroup.rotation.y,
       };
+
+      // Broadcast real-time player movement (throttled inside multiplayerService)
+      multiplayerService.updateMove(
+        playerGroup.position.x,
+        playerGroup.position.y,
+        playerGroup.position.z,
+        playerGroup.rotation.y,
+        isLocalMoving
+      );
 
       // Update Mini-Map UI periodically (~15fps to avoid excess React re-renders)
       if (frameCount % 4 === 0) {
@@ -1750,6 +1956,13 @@ export default function ThreeCity({
     resizeObserver.observe(container);
 
     return () => {
+      unsubscribeDelta();
+      localTagSpriteRef.current = null;
+      (localTagSprite.material as THREE.SpriteMaterial).map?.dispose();
+      localTagSprite.material.dispose();
+      for (const existingId of Array.from(remoteAvatars.keys())) {
+        removeRemoteAvatar(existingId);
+      }
       domEl.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUpOrCancel);
@@ -1887,6 +2100,95 @@ export default function ThreeCity({
             : 'Mode Malam'}
         </button>
       </div>
+
+      {/* LIVE MULTIPLAYER ONLINE PLAYERS BADGE (1 SHARED MAP) */}
+      <button
+        onClick={() => setShowOnlineList((v) => !v)}
+        className={`absolute bg-slate-950/80 hover:bg-slate-900/95 backdrop-blur-md border border-emerald-500/40 text-white shadow-xl z-20 flex items-center transition ${
+          isMobileLayout
+            ? 'top-10 right-2 px-2 py-1 rounded-xl space-x-1.5 text-[10px] font-bold'
+            : 'top-14 right-3 px-3 py-1.5 rounded-2xl space-x-2 text-xs font-bold'
+        }`}
+        title="Lihat seluruh pemain real-time yang sedang online di peta ini"
+      >
+        <span
+          className={`rounded-full shrink-0 ${
+            isOnlineConnected ? 'w-2 h-2 bg-emerald-400 animate-pulse' : 'w-2 h-2 bg-amber-400'
+          }`}
+        />
+        <Users className={isMobileLayout ? 'w-3 h-3 text-emerald-300' : 'w-3.5 h-3.5 text-emerald-300'} />
+        <span>{onlinePlayers.length} Online</span>
+        <span className="bg-indigo-600/80 text-white px-1.5 py-0.5 rounded-md text-[9px] font-black">
+          Lv.{playerLevel}
+        </span>
+      </button>
+
+      {/* LIVE ONLINE PLAYERS LIST OVERLAY */}
+      {showOnlineList && (
+        <div
+          className={`absolute bg-slate-950/92 backdrop-blur-lg border border-indigo-500/40 text-white shadow-2xl z-40 rounded-2xl overflow-hidden flex flex-col ${
+            isMobileLayout ? 'top-20 right-2 w-64 max-h-56' : 'top-24 right-3 w-80 max-h-72'
+          }`}
+        >
+          <div className="px-3 py-2 bg-slate-900/90 border-b border-white/10 flex items-center justify-between">
+            <div className="flex items-center space-x-1.5">
+              <Users className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-xs font-extrabold">
+                Pemain di Peta ({onlinePlayers.length})
+              </span>
+            </div>
+            <button
+              onClick={() => setShowOnlineList(false)}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="p-2 space-y-1.5 overflow-y-auto">
+            {onlinePlayers.length === 0 ? (
+              <p className="text-[11px] text-slate-400 text-center py-3">
+                Menghubungkan ke server peta real-time...
+              </p>
+            ) : (
+              onlinePlayers
+                .slice()
+                .sort((a, b) => b.solvedQuestions - a.solvedQuestions)
+                .map((p) => {
+                  const isMe = p.id === selfPlayerId;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`px-2.5 py-1.5 rounded-xl border flex items-center justify-between space-x-2 ${
+                        isMe
+                          ? 'bg-emerald-950/50 border-emerald-500/40'
+                          : 'bg-slate-900/70 border-white/10'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-bold text-white truncate flex items-center space-x-1">
+                          <span className="truncate">{p.name}</span>
+                          {isMe && (
+                            <span className="text-[9px] text-emerald-300 font-black shrink-0">(Kamu)</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {p.studentClass} • {p.school}
+                          {p.activeChapterId ? ` • Bab ${p.activeChapterId}` : ''}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] font-black text-amber-300">Lv.{p.level}</div>
+                        <div className="text-[9px] text-slate-300">
+                          {p.completedChapters}/11 Bab • {p.solvedQuestions}/55
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KICKED BUILDING COOLDOWN TOP REMINDER */}
       {kickedChapterId !== null && (
@@ -2073,6 +2375,20 @@ export default function ThreeCity({
               </g>
             );
           })}
+          {/* Real-Time Connected Remote Players on Radar */}
+          {onlinePlayers
+            .filter((p) => p.id !== selfPlayerId)
+            .map((p) => (
+              <circle
+                key={p.id}
+                cx={p.x}
+                cy={p.z}
+                r="2.6"
+                fill="#4ade80"
+                stroke="#0f172a"
+                strokeWidth="0.9"
+              />
+            ))}
           {/* Player Arrow */}
           <g
             transform={`translate(${playerMiniPos.x}, ${playerMiniPos.z}) rotate(${

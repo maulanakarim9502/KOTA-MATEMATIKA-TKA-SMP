@@ -9,6 +9,7 @@ import WelcomeModal from './components/WelcomeModal';
 import StudyModal from './components/StudyModal';
 import { logoutGoogle, TEACHER_EMAIL } from './services/googleDriveService';
 import { ambientMusic } from './services/ambientMusicService';
+import { multiplayerService } from './services/multiplayerService';
 import {
   Volume2,
   VolumeX,
@@ -193,6 +194,7 @@ export default function App() {
   const isTeacherAccount = isLoggedIn && studentEmail.toLowerCase() === TEACHER_EMAIL.toLowerCase();
 
   const handleLogout = async () => {
+    multiplayerService.disconnect();
     setIsLoggedIn(false);
     setActiveChapterId(null);
     localStorage.removeItem('tka_smp_roblox_user');
@@ -244,10 +246,50 @@ export default function App() {
     setKickedChapterId(kickedId);
   };
 
+  const solvedQuestions = Object.values(userProgress).filter((p) => p.solved).length;
+  const completedChapters = Array.from({ length: 11 }, (_, idx) => {
+    const chId = idx + 1;
+    const allFiveSolved = [1, 2, 3, 4, 5].every((q) => userProgress[(chId - 1) * 5 + q]?.solved);
+    return allFiveSolved ? 1 : 0;
+  }).reduce((a: number, b: number) => a + b, 0);
+  const playerLevel = 1 + Math.floor(solvedQuestions / 5);
+
   const totalScore = Object.values(userProgress).reduce(
     (acc, p) => acc + (p.solved ? p.stars * 10 : 0),
     0
   );
+
+  // Connect to shared real-time 3D city map whenever logged in
+  useEffect(() => {
+    if (!isLoggedIn) {
+      multiplayerService.disconnect();
+      return;
+    }
+    multiplayerService.connect({
+      name: studentName,
+      school: studentSchool,
+      studentClass,
+      x: 0,
+      y: 0.2,
+      z: 12,
+      yaw: Math.PI,
+      isMoving: false,
+      solvedQuestions,
+      completedChapters,
+      totalScore,
+      activeChapterId,
+    });
+
+    return () => {
+      multiplayerService.disconnect();
+    };
+  }, [isLoggedIn, studentName, studentSchool, studentClass]);
+
+  // Broadcast live progress & building status changes to all players in the map
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    multiplayerService.updateProgress(solvedQuestions, completedChapters, totalScore, activeChapterId);
+  }, [isLoggedIn, solvedQuestions, completedChapters, totalScore, activeChapterId]);
 
   return (
     <div className="h-[100dvh] w-screen bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden relative">
@@ -277,6 +319,9 @@ export default function App() {
                 <User className="w-3.5 h-3.5 text-indigo-400" />
                 <span>
                   {studentName} • {studentClass} ({studentSchool})
+                </span>
+                <span className="bg-indigo-600/80 text-white px-2 py-0.5 rounded-full text-[10px] font-extrabold">
+                  Lv.{playerLevel} ({completedChapters}/11 Bab)
                 </span>
                 <span className="text-amber-400 flex items-center">
                   <Star className="w-3 h-3 fill-amber-400 mr-1" />
@@ -419,6 +464,10 @@ export default function App() {
           userProgress={userProgress}
           kickedChapterId={kickedChapterId}
           isMobileLayout={isMobileLayout}
+          playerName={studentName}
+          playerLevel={playerLevel}
+          solvedQuestions={solvedQuestions}
+          completedChapters={completedChapters}
           onSelectChapter={handleSelectChapter}
           speakText={speakText}
         />
