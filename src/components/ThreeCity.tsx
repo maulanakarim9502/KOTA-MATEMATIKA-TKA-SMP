@@ -17,10 +17,6 @@ import {
 } from '../data/cityLayout';
 import {
   Play,
-  ArrowUp,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
   Compass,
   Volume2,
   Navigation,
@@ -210,6 +206,9 @@ export default function ThreeCity({
 }: ThreeCityProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const joystickRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const analogBaseRef = useRef<HTMLDivElement>(null);
+  const analogPointerIdRef = useRef<number | null>(null);
+  const [knobPos, setKnobPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const playerPosRef = useRef<{ x: number; z: number; yaw: number }>({ x: 0, z: 12, yaw: Math.PI });
   const lastAnnouncedChapterRef = useRef<number | null>(null);
   const speakTextRef = useRef(speakText);
@@ -272,8 +271,52 @@ export default function ThreeCity({
     Math.hypot(activeQuest.x - playerMiniPos.x, activeQuest.z - playerMiniPos.z)
   );
 
-  const handleSetJoystick = (x: number, y: number) => {
-    joystickRef.current = { x, y };
+  const updateAnalogFromClientPos = (clientX: number, clientY: number) => {
+    const baseEl = analogBaseRef.current;
+    if (!baseEl) return;
+    const rect = baseEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const maxRadius = rect.width * 0.36;
+
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxRadius && dist > 0) {
+      dx = (dx / dist) * maxRadius;
+      dy = (dy / dist) * maxRadius;
+    }
+
+    setKnobPos({ x: dx, y: dy });
+    joystickRef.current = {
+      x: maxRadius > 0 ? dx / maxRadius : 0,
+      y: maxRadius > 0 ? dy / maxRadius : 0,
+    };
+  };
+
+  const handleAnalogPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (analogPointerIdRef.current !== null) return;
+    analogPointerIdRef.current = e.pointerId;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateAnalogFromClientPos(e.clientX, e.clientY);
+  };
+
+  const handleAnalogPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerId !== analogPointerIdRef.current) return;
+    e.stopPropagation();
+    updateAnalogFromClientPos(e.clientX, e.clientY);
+  };
+
+  const handleAnalogPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerId !== analogPointerIdRef.current) return;
+    e.stopPropagation();
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    analogPointerIdRef.current = null;
+    setKnobPos({ x: 0, y: 0 });
+    joystickRef.current = { x: 0, y: 0 };
   };
 
   // Announce quest directions via Voice AI
@@ -1402,29 +1445,53 @@ export default function ThreeCity({
       });
     });
 
-    // --- CAMERA ORBIT DRAG + KEYBOARD CONTROLS ---
-    let cameraYaw = 0; // Orbit angle behind player
-    let isDragging = false;
-    let lastMouseX = 0;
-
-    const onPointerDown = (e: PointerEvent) => {
-      isDragging = true;
-      lastMouseX = e.clientX;
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!isDragging) return;
-      const deltaX = e.clientX - lastMouseX;
-      lastMouseX = e.clientX;
-      cameraYaw -= deltaX * 0.006;
-    };
-    const onPointerUp = () => {
-      isDragging = false;
-    };
+    // --- HIGH-SENSITIVITY MULTI-TOUCH CAMERA ORBIT DRAG + KEYBOARD CONTROLS ---
+    let cameraYaw = 0; // Horizontal orbit angle behind player
+    let cameraPitch = 0.42; // Vertical elevation pitch (rad)
+    let activeCameraPointerId: number | null = null;
+    let lastPointerX = 0;
+    let lastPointerY = 0;
 
     const domEl = renderer.domElement;
+    domEl.style.touchAction = 'none';
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (activeCameraPointerId !== null) return;
+      activeCameraPointerId = e.pointerId;
+      lastPointerX = e.clientX;
+      lastPointerY = e.clientY;
+      try {
+        domEl.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore if unsupported
+      }
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerId !== activeCameraPointerId) return;
+      const deltaX = e.clientX - lastPointerX;
+      const deltaY = e.clientY - lastPointerY;
+      lastPointerX = e.clientX;
+      lastPointerY = e.clientY;
+      // High responsiveness horizontal & vertical swipe sensitivity
+      cameraYaw -= deltaX * 0.015;
+      cameraPitch = Math.max(0.16, Math.min(0.92, cameraPitch + deltaY * 0.0085));
+    };
+    const onPointerUpOrCancel = (e: PointerEvent) => {
+      if (e.pointerId !== activeCameraPointerId) return;
+      activeCameraPointerId = null;
+      try {
+        if (domEl.hasPointerCapture(e.pointerId)) {
+          domEl.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
     domEl.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointerup', onPointerUpOrCancel);
+    window.addEventListener('pointercancel', onPointerUpOrCancel);
 
     const keys: Record<string, boolean> = {};
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1564,26 +1631,34 @@ export default function ThreeCity({
         npc.rightArm.rotation.x = walkSwing;
       });
 
-      // 5. Player Input relative to camera yaw (smooth GTA / Roblox third-person control)
+      // 5. Smooth 360-degree Analog & WASD Input relative to camera yaw
       let inputX = 0;
       let inputZ = 0;
-      if (keys['ArrowUp'] || keys['KeyW'] || joystickRef.current.y < -0.2) inputZ -= 1;
-      if (keys['ArrowDown'] || keys['KeyS'] || joystickRef.current.y > 0.2) inputZ += 1;
-      if (keys['ArrowLeft'] || keys['KeyA'] || joystickRef.current.x < -0.2) inputX -= 1;
-      if (keys['ArrowRight'] || keys['KeyD'] || joystickRef.current.x > 0.2) inputX += 1;
-      if (keys['KeyQ']) cameraYaw += 0.03;
-      if (keys['KeyE']) cameraYaw -= 0.03;
+      if (keys['ArrowUp'] || keys['KeyW']) inputZ -= 1;
+      if (keys['ArrowDown'] || keys['KeyS']) inputZ += 1;
+      if (keys['ArrowLeft'] || keys['KeyA']) inputX -= 1;
+      if (keys['ArrowRight'] || keys['KeyD']) inputX += 1;
 
-      if (inputX !== 0 || inputZ !== 0) {
-        const mag = Math.hypot(inputX, inputZ);
-        const nx = inputX / mag;
-        const nz = inputZ / mag;
+      if (Math.abs(joystickRef.current.x) > 0.08 || Math.abs(joystickRef.current.y) > 0.08) {
+        inputX += joystickRef.current.x;
+        inputZ += joystickRef.current.y;
+      }
+
+      if (keys['KeyQ']) cameraYaw += 0.045;
+      if (keys['KeyE']) cameraYaw -= 0.045;
+
+      const rawMag = Math.hypot(inputX, inputZ);
+      if (rawMag > 0.05) {
+        const clampedMag = Math.min(1, rawMag);
+        const nx = inputX / rawMag;
+        const nz = inputZ / rawMag;
+        const effectiveSpeed = moveSpeed * clampedMag;
 
         // Rotate input vector by cameraYaw
         const cosY = Math.cos(cameraYaw);
         const sinY = Math.sin(cameraYaw);
-        const worldDx = (nx * cosY + nz * sinY) * moveSpeed;
-        const worldDz = (-nx * sinY + nz * cosY) * moveSpeed;
+        const worldDx = (nx * cosY + nz * sinY) * effectiveSpeed;
+        const worldDz = (-nx * sinY + nz * cosY) * effectiveSpeed;
 
         playerGroup.position.x = Math.max(-78, Math.min(78, playerGroup.position.x + worldDx));
         playerGroup.position.z = Math.max(-78, Math.min(78, playerGroup.position.z + worldDz));
@@ -1593,10 +1668,10 @@ export default function ThreeCity({
         let diff = targetAngle - playerGroup.rotation.y;
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        playerGroup.rotation.y += diff * 0.22;
+        playerGroup.rotation.y += diff * 0.24;
 
-        // Sharp limb swing animation
-        const swing = Math.sin(Date.now() * 0.014) * 0.65;
+        // Sharp limb swing animation scaled by speed
+        const swing = Math.sin(Date.now() * 0.014) * 0.65 * clampedMag;
         pLeftLeg.rotation.x = swing;
         pRightLeg.rotation.x = -swing;
         pLeftArm.rotation.x = -swing * 0.85;
@@ -1623,19 +1698,19 @@ export default function ThreeCity({
         setPlayerMiniPos({ ...playerPosRef.current });
       }
 
-      // 6. Smooth 3rd-Person Chase Camera
-      const camDist = 9.5;
-      const camHeight = 4.8;
-      const desiredCamX = playerGroup.position.x + Math.sin(cameraYaw) * camDist;
-      const desiredCamZ = playerGroup.position.z + Math.cos(cameraYaw) * camDist;
+      // 6. Responsive Smooth 3rd-Person Chase Camera
+      const camDist = 10.2;
+      const horizDist = Math.cos(cameraPitch) * camDist;
+      const desiredCamX = playerGroup.position.x + Math.sin(cameraYaw) * horizDist;
+      const desiredCamZ = playerGroup.position.z + Math.cos(cameraYaw) * horizDist;
       const desiredCamY = Math.max(
-        getElevation(desiredCamX, desiredCamZ) + 2.5,
-        playerGroup.position.y + camHeight
+        getElevation(desiredCamX, desiredCamZ) + 2.0,
+        playerGroup.position.y + 1.8 + Math.sin(cameraPitch) * camDist
       );
 
-      camera.position.x += (desiredCamX - camera.position.x) * 0.14;
-      camera.position.z += (desiredCamZ - camera.position.z) * 0.14;
-      camera.position.y += (desiredCamY - camera.position.y) * 0.14;
+      camera.position.x += (desiredCamX - camera.position.x) * 0.28;
+      camera.position.z += (desiredCamZ - camera.position.z) * 0.28;
+      camera.position.y += (desiredCamY - camera.position.y) * 0.28;
       camera.lookAt(playerGroup.position.x, playerGroup.position.y + 1.9, playerGroup.position.z);
 
       // 7. Proximity Check with Chapter Buildings + Voice AI arrival announcement
@@ -1673,7 +1748,8 @@ export default function ThreeCity({
     return () => {
       domEl.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointerup', onPointerUpOrCancel);
+      window.removeEventListener('pointercancel', onPointerUpOrCancel);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', handleResize);
@@ -1706,7 +1782,7 @@ export default function ThreeCity({
       )}
 
       {/* 3D Canvas Mount */}
-      <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+      <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing touch-none" />
 
       {/* TOP-LEFT HUD: ACTIVE VOICE AI QUEST GUIDE */}
       <div className="absolute top-3 left-3 bg-slate-950/85 backdrop-blur-md px-4 py-3 rounded-2xl border border-indigo-500/40 text-white shadow-xl max-w-xs z-20 space-y-2">
@@ -1727,7 +1803,7 @@ export default function ThreeCity({
         </div>
         <p className="text-xs font-bold leading-snug text-white">{activeQuest.chapter.title}</p>
         <p className="text-[10px] text-slate-300">
-          Geser layar untuk putar kamera • WASD / Panah / Analog untuk jalan
+          Geser layar kanan untuk kamera • Analog kiri (HP) / WASD (Laptop) untuk jalan
         </p>
       </div>
 
@@ -1770,8 +1846,70 @@ export default function ThreeCity({
         </div>
       )}
 
-      {/* BOTTOM-LEFT HUD: GTA-STYLE MINI-MAP RADAR */}
-      <div className="absolute bottom-4 left-4 w-36 h-36 sm:w-44 sm:h-44 bg-slate-950/85 backdrop-blur-md rounded-full border-4 border-slate-700/90 shadow-2xl overflow-hidden z-20">
+      {/* BOTTOM-LEFT HUD: SMOOTH 360-DEGREE ANALOG JOYSTICK (NO BUTTONS, FOR MOBILE THUMB) */}
+      <div className="absolute bottom-4 left-4 z-30 flex flex-col items-center space-y-1.5 select-none">
+        <div
+          ref={analogBaseRef}
+          onPointerDown={handleAnalogPointerDown}
+          onPointerMove={handleAnalogPointerMove}
+          onPointerUp={handleAnalogPointerUp}
+          onPointerCancel={handleAnalogPointerUp}
+          className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-slate-950/75 backdrop-blur-md border-2 border-indigo-400/50 shadow-2xl flex items-center justify-center touch-none cursor-pointer"
+        >
+          {/* Inner subtle guide ring */}
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border border-white/15 pointer-events-none" />
+          {/* Draggable Analog Thumb Knob */}
+          <div
+            style={{
+              transform: `translate(${knobPos.x}px, ${knobPos.y}px)`,
+            }}
+            className="absolute w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-500 to-sky-400 border-2 border-white/85 shadow-xl pointer-events-none flex items-center justify-center"
+          >
+            <div className="w-4 h-4 rounded-full bg-white/40" />
+          </div>
+        </div>
+        <span className="text-[10px] font-bold text-slate-200 bg-slate-950/75 px-2.5 py-0.5 rounded-full border border-white/10 pointer-events-none">
+          Analog (HP) • WASD (Laptop)
+        </span>
+      </div>
+
+      {/* NEARBY BUILDING ENTRY PROMPT */}
+      {nearbyChapter && (
+        nearbyChapter.id === kickedChapterId ? (
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-rose-700 to-red-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-rose-300/40 flex items-center space-x-3 z-30">
+            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
+              <Lock className="w-5 h-5 text-yellow-300" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title} (Terkunci)</h3>
+              <p className="text-[11px] text-rose-100">
+                Kamu baru saja di-kick karena salah menjawab! Cari gedung lain dulu.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-white/30 flex items-center space-x-3 z-30">
+            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
+              <Play className="w-5 h-5 text-yellow-300 fill-yellow-300" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title}</h3>
+              <p className="text-[11px] text-indigo-100 flex items-center">
+                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-300" /> Pintu Gedung Terbuka!
+              </p>
+            </div>
+            <button
+              onClick={() => onSelectChapter(nearbyChapter.id)}
+              className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black px-4 py-2 rounded-2xl shadow-lg transition transform hover:scale-105 text-xs shrink-0"
+            >
+              MASUK GEDUNG
+            </button>
+          </div>
+        )
+      )}
+
+      {/* BOTTOM-RIGHT HUD: GTA-STYLE MINI-MAP RADAR */}
+      <div className="absolute bottom-4 right-4 w-32 h-32 sm:w-40 sm:h-40 bg-slate-950/85 backdrop-blur-md rounded-full border-4 border-slate-700/90 shadow-2xl overflow-hidden z-20 pointer-events-none">
         <svg viewBox="-68 -68 136 136" className="w-full h-full">
           {/* Radar Background */}
           <circle cx="0" cy="0" r="68" fill="#14532d" opacity="0.45" />
@@ -1843,82 +1981,6 @@ export default function ThreeCity({
         <div className="absolute bottom-1 inset-x-0 text-center text-[9px] font-bold text-slate-300 pointer-events-none">
           PETA KOTA (11 BAB)
         </div>
-      </div>
-
-      {/* NEARBY BUILDING ENTRY PROMPT */}
-      {nearbyChapter && (
-        nearbyChapter.id === kickedChapterId ? (
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-rose-700 to-red-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-rose-300/40 flex items-center space-x-3 z-30">
-            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
-              <Lock className="w-5 h-5 text-yellow-300" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title} (Terkunci)</h3>
-              <p className="text-[11px] text-rose-100">
-                Kamu baru saja di-kick karena salah menjawab! Cari gedung lain dulu.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-white/30 flex items-center space-x-3 z-30">
-            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
-              <Play className="w-5 h-5 text-yellow-300 fill-yellow-300" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title}</h3>
-              <p className="text-[11px] text-indigo-100 flex items-center">
-                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-300" /> Pintu Gedung Terbuka!
-              </p>
-            </div>
-            <button
-              onClick={() => onSelectChapter(nearbyChapter.id)}
-              className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black px-4 py-2 rounded-2xl shadow-lg transition transform hover:scale-105 text-xs shrink-0"
-            >
-              MASUK GEDUNG
-            </button>
-          </div>
-        )
-      )}
-
-      {/* ON-SCREEN TOUCH ANALOG / ARROW PAD */}
-      <div className="absolute bottom-4 right-4 bg-slate-950/85 backdrop-blur-md p-2.5 rounded-3xl border border-white/10 flex flex-col items-center space-y-1 shadow-2xl z-30">
-        <button
-          onPointerDown={() => handleSetJoystick(0, -1)}
-          onPointerUp={() => handleSetJoystick(0, 0)}
-          onPointerLeave={() => handleSetJoystick(0, 0)}
-          className="w-10 h-10 bg-indigo-600/85 hover:bg-indigo-500 active:bg-indigo-400 rounded-xl flex items-center justify-center text-white shadow"
-        >
-          <ArrowUp className="w-5 h-5" />
-        </button>
-        <div className="flex space-x-1">
-          <button
-            onPointerDown={() => handleSetJoystick(-1, 0)}
-            onPointerUp={() => handleSetJoystick(0, 0)}
-            onPointerLeave={() => handleSetJoystick(0, 0)}
-            className="w-10 h-10 bg-indigo-600/85 hover:bg-indigo-500 active:bg-indigo-400 rounded-xl flex items-center justify-center text-white shadow"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-slate-400 text-[10px] font-bold">
-            WASD
-          </div>
-          <button
-            onPointerDown={() => handleSetJoystick(1, 0)}
-            onPointerUp={() => handleSetJoystick(0, 0)}
-            onPointerLeave={() => handleSetJoystick(0, 0)}
-            className="w-10 h-10 bg-indigo-600/85 hover:bg-indigo-500 active:bg-indigo-400 rounded-xl flex items-center justify-center text-white shadow"
-          >
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        </div>
-        <button
-          onPointerDown={() => handleSetJoystick(0, 1)}
-          onPointerUp={() => handleSetJoystick(0, 0)}
-          onPointerLeave={() => handleSetJoystick(0, 0)}
-          className="w-10 h-10 bg-indigo-600/85 hover:bg-indigo-500 active:bg-indigo-400 rounded-xl flex items-center justify-center text-white shadow"
-        >
-          <ArrowDown className="w-5 h-5" />
-        </button>
       </div>
     </div>
   );
