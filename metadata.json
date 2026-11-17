@@ -1,0 +1,6 @@
+{
+  "name": "TKA SMP Interaktif - Latihan Soal & Voice AI",
+  "description": "Media latihan soal interaktif TKA SMP Matematika dan Bahasa Indonesia berstandar Pusmendik/Kemendikdasmen dengan Voice AI, video pembelajaran, dan aktivitas interaktif.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
