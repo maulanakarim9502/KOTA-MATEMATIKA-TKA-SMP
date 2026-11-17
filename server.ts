@@ -12,6 +12,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 export interface OnlinePlayerState {
   id: string;
+  uid?: string | null;
   name: string;
   school: string;
   studentClass: string;
@@ -165,6 +166,18 @@ async function startServer() {
   // Authoritative in-memory world state for the single shared city map
   const players = new Map<string, OnlinePlayerState>();
   const sessions = new Map<string, ClientSession>();
+  const httpClients = new Map<string, number>();
+
+  const purgeExpiredHttpClients = (now: number) => {
+    for (const [hid, lastPing] of httpClients.entries()) {
+      if (now - lastPing > 12000) {
+        httpClients.delete(hid);
+        if (players.delete(hid)) {
+          broadcastAll({ type: 'player:left', id: hid });
+        }
+      }
+    }
+  };
 
   const sendJson = (ws: WebSocket, data: unknown) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -186,11 +199,99 @@ async function startServer() {
   };
 
   app.get('/api/health', (_req, res) => {
+    purgeExpiredHttpClients(Date.now());
     res.json({
       ok: true,
       onlinePlayers: players.size,
       timestamp: Date.now(),
     });
+  });
+
+  app.post('/api/world/sync', (req, res) => {
+    const now = Date.now();
+    purgeExpiredHttpClients(now);
+
+    const payload = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+      string,
+      unknown
+    >;
+
+    let httpId =
+      typeof payload.id === 'string' &&
+      payload.id.startsWith('http-') &&
+      payload.id.length <= 80 &&
+      !sessions.has(payload.id)
+        ? payload.id
+        : `http-${crypto.randomUUID()}`;
+
+    const rawUid = typeof payload.uid === 'string' ? payload.uid.trim().slice(0, 128) : '';
+    const uid = rawUid && /^[a-zA-Z0-9_-]+$/.test(rawUid) ? rawUid : null;
+
+    const name = sanitizeText(payload.name, 30, 'Siswa');
+    const school = sanitizeText(payload.school, 36, 'SMP');
+    const studentClass = sanitizeText(payload.studentClass, 12, '-');
+    const solvedQuestions = Math.round(clampNumber(payload.solvedQuestions, 0, 55, 0));
+    const completedChapters = Math.round(clampNumber(payload.completedChapters, 0, 11, 0));
+    const totalScore = Math.round(clampNumber(payload.totalScore, 0, 5000, 0));
+    const activeChapterId =
+      typeof payload.activeChapterId === 'number' &&
+      payload.activeChapterId >= 1 &&
+      payload.activeChapterId <= 11
+        ? Math.round(payload.activeChapterId)
+        : null;
+
+    const existing = players.get(httpId);
+    const state: OnlinePlayerState = {
+      id: httpId,
+      uid,
+      name,
+      school,
+      studentClass,
+      avatarColor: existing?.avatarColor ?? pickAvatarColor(`${name}-${uid || httpId}`),
+      x: clampNumber(payload.x, -80, 80, existing?.x ?? 0),
+      y: clampNumber(payload.y, -10, 40, existing?.y ?? 0.2),
+      z: clampNumber(payload.z, -80, 80, existing?.z ?? 12),
+      yaw: clampNumber(payload.yaw, -Math.PI * 4, Math.PI * 4, existing?.yaw ?? Math.PI),
+      isMoving: Boolean(payload.isMoving),
+      level: computeLevel(solvedQuestions),
+      solvedQuestions,
+      completedChapters,
+      totalScore,
+      activeChapterId,
+      joinedAt: existing?.joinedAt ?? now,
+      lastSeen: now,
+    };
+
+    const isNew = !existing;
+    players.set(httpId, state);
+    httpClients.set(httpId, now);
+
+    if (isNew) {
+      broadcastAll({ type: 'player:joined', player: state });
+    } else {
+      broadcastAll({ type: 'player:updated', player: state });
+    }
+
+    res.json({
+      ok: true,
+      selfId: httpId,
+      players: Array.from(players.values()),
+    });
+  });
+
+  app.post('/api/world/leave', (req, res) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+      string,
+      unknown
+    >;
+    const id = typeof body.id === 'string' ? body.id.trim().slice(0, 80) : '';
+    if (id && id.startsWith('http-')) {
+      httpClients.delete(id);
+      if (players.delete(id)) {
+        broadcastAll({ type: 'player:left', id });
+      }
+    }
+    res.json({ ok: true });
   });
 
   app.get('/api/progress', (req, res) => {
@@ -282,6 +383,8 @@ async function startServer() {
       const now = Date.now();
 
       if (msg.type === 'player:join') {
+        const rawUid = typeof payload.uid === 'string' ? payload.uid.trim().slice(0, 128) : '';
+        const uid = rawUid && /^[a-zA-Z0-9_-]+$/.test(rawUid) ? rawUid : null;
         const name = sanitizeText(payload.name, 30, 'Siswa');
         const school = sanitizeText(payload.school, 36, 'SMP');
         const studentClass = sanitizeText(payload.studentClass, 12, '-');
@@ -298,10 +401,11 @@ async function startServer() {
         const existing = players.get(playerId);
         const state: OnlinePlayerState = {
           id: playerId,
+          uid,
           name,
           school,
           studentClass,
-          avatarColor: existing?.avatarColor ?? pickAvatarColor(`${name}-${playerId}`),
+          avatarColor: existing?.avatarColor ?? pickAvatarColor(`${name}-${uid || playerId}`),
           x: clampNumber(payload.x, -80, 80, existing?.x ?? 0),
           y: clampNumber(payload.y, -10, 40, existing?.y ?? 0.2),
           z: clampNumber(payload.z, -80, 80, existing?.z ?? 12),
@@ -407,9 +511,10 @@ async function startServer() {
     });
   });
 
-  // Periodic heartbeat to purge disconnected mobile/tab ghosts promptly
+  // Periodic heartbeat to purge disconnected mobile/tab ghosts & stale HTTP polling clients promptly
   const heartbeatInterval = setInterval(() => {
     const now = Date.now();
+    purgeExpiredHttpClients(now);
     for (const [id, session] of sessions.entries()) {
       if (!session.isAlive) {
         session.ws.terminate();

@@ -1,0 +1,88 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Authenticated student profile and learning progress across the 11 TKA Matematika chapters.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "school": { "type": "string", "maxLength": 60 },
+        "studentClass": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 100 },
+        "solvedCount": { "type": "integer" },
+        "completedChapters": { "type": "integer" },
+        "level": { "type": "integer" },
+        "totalScore": { "type": "integer" },
+        "progress": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "name",
+        "school",
+        "studentClass",
+        "email",
+        "solvedCount",
+        "completedChapters",
+        "level",
+        "totalScore",
+        "progress",
+        "updatedAt"
+      ]
+    },
+    "WorldPlayer": {
+      "title": "WorldPlayer",
+      "description": "Public multiplayer avatar coordinates and completion level inside the shared 3D city map (no PII).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "mapId": { "type": "string", "enum": ["tka-city-main"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "school": { "type": "string", "maxLength": 60 },
+        "studentClass": { "type": "string", "maxLength": 20 },
+        "avatarColor": { "type": "integer" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "yaw": { "type": "number" },
+        "isMoving": { "type": "boolean" },
+        "level": { "type": "integer" },
+        "solvedQuestions": { "type": "integer" },
+        "completedChapters": { "type": "integer" },
+        "activeChapterId": { "type": "integer" },
+        "isOnline": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "mapId",
+        "name",
+        "school",
+        "studentClass",
+        "avatarColor",
+        "x",
+        "y",
+        "z",
+        "yaw",
+        "isMoving",
+        "level",
+        "solvedQuestions",
+        "completedChapters",
+        "activeChapterId",
+        "isOnline",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProgress" },
+      "description": "Owner-scoped student progress and profile data."
+    },
+    "/worldPlayers/{playerId}": {
+      "schema": { "$ref": "#/entities/WorldPlayer" },
+      "description": "Real-time multiplayer player avatars in the shared city map."
+    }
+  }
+}

@@ -15,11 +15,12 @@ import {
   GraduationCap,
   CloudCheck,
   Loader2,
+  Mail,
 } from 'lucide-react';
 import GoogleSignInButton from './GoogleSignInButton';
 import {
   buildAccountKey,
-  googleSignIn,
+  googleBasicSignIn,
   loadBestStudentRecord,
   StudentProgressMap,
   subscribeFirebaseUser,
@@ -99,13 +100,13 @@ export default function WelcomeModal({ onLoginSuccess, speakText }: WelcomeModal
     setIsConnecting(true);
     setAuthError('');
     try {
-      const res = await googleSignIn();
+      const res = await googleBasicSignIn();
       if (!res?.user) return;
 
       const gEmail = res.user.email || emailInput;
       const gName = nameInput.trim() || res.user.displayName || 'Siswa';
       setEmailInput(gEmail);
-      setDriveConnected(true);
+      setDriveConnected(Boolean(res.accessToken));
 
       const accountKey = buildAccountKey(gEmail, gName, schoolInput, classInput);
       const saved = await loadBestStudentRecord(accountKey, gEmail, {
@@ -292,6 +293,19 @@ export default function WelcomeModal({ onLoginSuccess, speakText }: WelcomeModal
                   required
                 />
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-800 flex items-center">
+                <Mail className="w-3.5 h-3.5 mr-1.5 text-indigo-600" /> Email Siswa (opsional jika popup Google terblokir)
+              </label>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                placeholder="Contoh: nama.siswa@gmail.com"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:outline-none focus:border-indigo-600 text-xs sm:text-sm font-semibold text-slate-950 bg-white"
+              />
             </div>
 
             {authError && (

@@ -507,6 +507,9 @@ export default function StudyModal({
                       disabled={isSigningInDrive}
                       label={isSigningInDrive ? 'Menghubungkan Akun Google...' : 'Sign in with Google'}
                     />
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Jika muncul layar <em>&quot;Google belum memverifikasi aplikasi ini&quot;</em>, klik <strong>Lanjutan (Advanced)</strong> lalu klik <strong>Buka ...firebaseapp.com</strong> untuk melanjutkan kirim ke Drive.
+                    </p>
                   </div>
                 )}
 

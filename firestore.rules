@@ -1,0 +1,198 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function isTeacherAdmin() {
+      return isSignedIn() && request.auth.token.email == 'maulanakarim9502@gmail.com';
+    }
+
+    function isValidUserProgress(data) {
+      return data.keys().hasAll([
+          'uid',
+          'name',
+          'school',
+          'studentClass',
+          'email',
+          'solvedCount',
+          'completedChapters',
+          'level',
+          'totalScore',
+          'progress',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'name',
+          'school',
+          'studentClass',
+          'email',
+          'solvedCount',
+          'completedChapters',
+          'level',
+          'totalScore',
+          'progress',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid == request.auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+        && data.school is string && data.school.size() <= 60
+        && data.studentClass is string && data.studentClass.size() <= 20
+        && data.email is string && data.email.size() <= 100
+        && data.solvedCount is int && data.solvedCount >= 0 && data.solvedCount <= 55
+        && data.completedChapters is int && data.completedChapters >= 0 && data.completedChapters <= 11
+        && data.level is int && data.level >= 1 && data.level <= 12
+        && data.totalScore is int && data.totalScore >= 0 && data.totalScore <= 5000
+        && data.progress is map && data.progress.size() <= 55
+        && data.updatedAt == request.time;
+    }
+
+    function isValidWorldPlayer(data) {
+      return data.keys().hasAll([
+          'uid',
+          'mapId',
+          'name',
+          'school',
+          'studentClass',
+          'avatarColor',
+          'x',
+          'y',
+          'z',
+          'yaw',
+          'isMoving',
+          'level',
+          'solvedQuestions',
+          'completedChapters',
+          'activeChapterId',
+          'isOnline',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'mapId',
+          'name',
+          'school',
+          'studentClass',
+          'avatarColor',
+          'x',
+          'y',
+          'z',
+          'yaw',
+          'isMoving',
+          'level',
+          'solvedQuestions',
+          'completedChapters',
+          'activeChapterId',
+          'isOnline',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid == request.auth.uid
+        && data.mapId is string && data.mapId == 'tka-city-main'
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+        && data.school is string && data.school.size() <= 60
+        && data.studentClass is string && data.studentClass.size() <= 20
+        && data.avatarColor is int && data.avatarColor >= 0 && data.avatarColor <= 16777215
+        && data.x is number && data.x >= -85 && data.x <= 85
+        && data.y is number && data.y >= -15 && data.y <= 45
+        && data.z is number && data.z >= -85 && data.z <= 85
+        && data.yaw is number && data.yaw >= -20 && data.yaw <= 20
+        && data.isMoving is bool
+        && data.level is int && data.level >= 1 && data.level <= 12
+        && data.solvedQuestions is int && data.solvedQuestions >= 0 && data.solvedQuestions <= 55
+        && data.completedChapters is int && data.completedChapters >= 0 && data.completedChapters <= 11
+        && data.activeChapterId is int && data.activeChapterId >= 0 && data.activeChapterId <= 11
+        && data.isOnline is bool
+        && data.updatedAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || isTeacherAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isTeacherAdmin());
+      allow create: if isValidId(userId) && isSignedIn() && isOwner(userId) && isValidUserProgress(incoming());
+      allow update: if isValidId(userId)
+        && isSignedIn()
+        && isOwner(userId)
+        && isValidUserProgress(incoming())
+        && incoming().uid == existing().uid
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name',
+          'school',
+          'studentClass',
+          'email',
+          'solvedCount',
+          'completedChapters',
+          'level',
+          'totalScore',
+          'progress',
+          'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /worldPlayers/{playerId} {
+      allow get: if isValidId(playerId) && isSignedIn() && existing().mapId == 'tka-city-main';
+      allow list: if isSignedIn() && resource.data.mapId == 'tka-city-main' && resource.data.isOnline == true;
+      allow create: if isValidId(playerId) && isSignedIn() && isOwner(playerId) && isValidWorldPlayer(incoming());
+      allow update: if isValidId(playerId)
+        && isSignedIn()
+        && isOwner(playerId)
+        && isValidWorldPlayer(incoming())
+        && incoming().uid == existing().uid
+        && incoming().mapId == existing().mapId
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'x',
+            'y',
+            'z',
+            'yaw',
+            'isMoving',
+            'isOnline',
+            'updatedAt'
+          ])
+          || incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'school',
+            'studentClass',
+            'avatarColor',
+            'x',
+            'y',
+            'z',
+            'yaw',
+            'isMoving',
+            'level',
+            'solvedQuestions',
+            'completedChapters',
+            'activeChapterId',
+            'isOnline',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isValidId(playerId) && isSignedIn() && isOwner(playerId);
+    }
+  }
+}

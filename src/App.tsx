@@ -11,6 +11,7 @@ import {
   buildAccountKey,
   clearActiveSessionMeta,
   getAccessToken,
+  getCurrentFirebaseUser,
   googleSignIn,
   loadActiveSessionProfile,
   loadBestStudentRecord,
@@ -25,6 +26,7 @@ import {
   TEACHER_EMAIL,
   wasExplicitlyLoggedOut,
 } from './services/googleDriveService';
+import { getElevation } from './data/cityLayout';
 import { ambientMusic } from './services/ambientMusicService';
 import { multiplayerService } from './services/multiplayerService';
 import {
@@ -78,6 +80,18 @@ export default function App() {
   const syncTimerRef = useRef<number | null>(null);
   const isLoggedInRef = useRef<boolean>(false);
   isLoggedInRef.current = isLoggedIn;
+  const spawnCoordRef = useRef<{ x: number; z: number; yaw: number } | null>(null);
+  if (!spawnCoordRef.current) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 2.4 + Math.random() * 3.2;
+    const sx = Number((Math.cos(angle) * radius).toFixed(2));
+    const sz = Number((12 + Math.sin(angle) * radius).toFixed(2));
+    spawnCoordRef.current = {
+      x: sx,
+      z: sz,
+      yaw: Math.atan2(-sx, 12 - sz),
+    };
+  }
 
   useEffect(() => {
     const onResize = () => setIsMobileLayout(checkIsMobileViewport());
@@ -456,14 +470,16 @@ export default function App() {
       multiplayerService.disconnect();
       return;
     }
+    const spawn = spawnCoordRef.current || { x: 0, z: 12, yaw: Math.PI };
     multiplayerService.connect({
+      uid: getCurrentFirebaseUser()?.uid || null,
       name: studentName,
       school: studentSchool,
       studentClass,
-      x: 0,
-      y: 0.2,
-      z: 12,
-      yaw: Math.PI,
+      x: spawn.x,
+      y: getElevation(spawn.x, spawn.z) + 0.14,
+      z: spawn.z,
+      yaw: spawn.yaw,
       isMoving: false,
       solvedQuestions,
       completedChapters,
@@ -474,7 +490,7 @@ export default function App() {
     return () => {
       multiplayerService.disconnect();
     };
-  }, [isLoggedIn, studentName, studentSchool, studentClass]);
+  }, [isLoggedIn, studentName, studentSchool, studentClass, studentEmail]);
 
   // Broadcast live progress & building status changes to all players in the map
   useEffect(() => {
@@ -657,6 +673,7 @@ export default function App() {
           playerLevel={playerLevel}
           solvedQuestions={solvedQuestions}
           completedChapters={completedChapters}
+          initialSpawn={spawnCoordRef.current}
           onSelectChapter={handleSelectChapter}
           speakText={speakText}
         />

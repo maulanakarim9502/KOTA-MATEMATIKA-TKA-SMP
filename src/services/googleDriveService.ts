@@ -3,28 +3,58 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
   signInWithPopup,
   GoogleAuthProvider,
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { firebaseAuth as auth } from './firebaseApp';
+import {
+  isVerifiedFirebaseUser,
+  loadUserProgressFirestore,
+  saveUserProgressFirestore,
+} from './firestoreService';
 
 export const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 export const TEACHER_EMAIL = 'maulanakarim9502@gmail.com';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
-
-const provider = new GoogleAuthProvider();
-SCOPES.forEach((scope) => provider.addScope(scope));
+const basicProvider = new GoogleAuthProvider();
+const driveProvider = new GoogleAuthProvider();
+SCOPES.forEach((scope) => driveProvider.addScope(scope));
 
 let isSigningIn = false;
 // Cache OAuth access token strictly in memory (never in localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
+
+function formatGoogleAuthError(error: any): Error {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || '');
+  if (code === 'auth/unauthorized-domain') {
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    return new Error(
+      `Domain "${host}" belum didaftarkan di Firebase Authentication → Authorized Domains. Tambahkan domain tersebut di Firebase Console agar login Google aktif.`
+    );
+  }
+  if (
+    msg.toLowerCase().includes('access_denied') ||
+    msg.toLowerCase().includes('verification') ||
+    code === 'auth/operation-not-allowed'
+  ) {
+    return new Error(
+      'Akun Google diblokir karena OAuth Consent Screen di Google Cloud Console masih mode "Testing" atau belum dipublikasikan ke "In Production". Untuk guru/pemilik project: buka Google Cloud Console → APIs & Services → OAuth consent screen → klik "PUBLISH APP" (atau tambahkan email siswa di Test users). Siswa tetap bisa masuk dengan mengisi Nama, Sekolah, Kelas & Email di bawah.'
+    );
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return new Error(
+      'Popup login Google ditutup sebelum selesai. Jika muncul layar "Google belum memverifikasi aplikasi ini", klik "Lanjutan (Advanced)" → "Buka gen-lang-client-0719606438.firebaseapp.com".'
+    );
+  }
+  if (code === 'auth/popup-blocked') {
+    return new Error('Popup browser diblokir. Izinkan popup untuk situs ini lalu coba lagi.');
+  }
+  return error instanceof Error ? error : new Error('Gagal login dengan akun Google.');
+}
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
@@ -45,10 +75,26 @@ export const initAuth = (
   });
 };
 
+// Non-sensitive Google Sign-In (email & profile only — avoids sensitive drive.file verification block at login)
+export const googleBasicSignIn = async (): Promise<{ user: User; accessToken: string | null } | null> => {
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, basicProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    return { user: result.user, accessToken: credential?.accessToken || null };
+  } catch (error: any) {
+    console.error('Google Basic Sign-In error:', error);
+    throw formatGoogleAuthError(error);
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+// Full Google Drive Sign-In (includes drive.file scope for uploading solutions & syncing Drive files)
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, driveProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Gagal mendapatkan token akses Google Drive.');
@@ -56,14 +102,8 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     cachedAccessToken = credential.accessToken;
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
-    console.error('Google Sign-In error:', error);
-    if (error?.code === 'auth/unauthorized-domain') {
-      const host = typeof window !== 'undefined' ? window.location.hostname : '';
-      throw new Error(
-        `Domain "${host}" belum didaftarkan di Firebase Authentication → Authorized Domains. Tambahkan domain tersebut di Firebase Console agar login Google aktif di Netlify/Vercel.`
-      );
-    }
-    throw error;
+    console.error('Google Drive Sign-In error:', error);
+    throw formatGoogleAuthError(error);
   } finally {
     isSigningIn = false;
   }
@@ -604,12 +644,47 @@ export async function loadBestStudentRecord(
   fallbackProfile?: SavedStudentRecord['profile']
 ): Promise<SavedStudentRecord | null> {
   const localRec = loadLocalStudentRecord(accountKey);
-  const [serverRec, driveRec] = await Promise.all([
+  const currentUser = auth.currentUser;
+  const shouldLoadFirestore =
+    isVerifiedFirebaseUser() &&
+    currentUser?.uid &&
+    (!studentEmail ||
+      !currentUser.email ||
+      currentUser.email.toLowerCase() === studentEmail.trim().toLowerCase());
+
+  const [serverRec, driveRec, fsRec] = await Promise.all([
     fetchServerStudentRecord(accountKey),
     studentEmail ? loadProgressFromDrive(studentEmail, fallbackProfile?.name) : Promise.resolve(null),
+    shouldLoadFirestore && currentUser?.uid
+      ? loadUserProgressFirestore(currentUser.uid)
+          .then((rec): SavedStudentRecord | null => {
+            if (!rec) return null;
+            const prog: StudentProgressMap = {};
+            for (const [k, v] of Object.entries(rec.progress || {})) {
+              const qId = Number(k);
+              if (Number.isInteger(qId) && qId >= 1 && qId <= 55 && v) {
+                prog[qId] = v;
+              }
+            }
+            return {
+              accountKey,
+              profile: {
+                name: rec.name,
+                school: rec.school,
+                studentClass: rec.studentClass,
+                email: rec.email || studentEmail || '',
+              },
+              progress: prog,
+              updatedAt: rec.updatedAt || Date.now(),
+            };
+          })
+          .catch(() => null)
+      : Promise.resolve(null),
   ]);
 
-  const candidates = [localRec, serverRec, driveRec].filter(Boolean) as SavedStudentRecord[];
+  const candidates = [localRec, serverRec, driveRec, fsRec].filter(
+    Boolean
+  ) as SavedStudentRecord[];
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -649,7 +724,23 @@ export async function syncStudentRecordAll(
   options?: { syncDrive?: boolean; teacherFolderInput?: string }
 ): Promise<{ driveSynced: boolean }> {
   saveLocalStudentRecord(record);
-  await pushServerStudentRecord(record);
+
+  const tasks: Promise<unknown>[] = [pushServerStudentRecord(record)];
+  if (isVerifiedFirebaseUser()) {
+    tasks.push(
+      saveUserProgressFirestore({
+        name: record.profile.name,
+        school: record.profile.school,
+        studentClass: record.profile.studentClass,
+        email: record.profile.email,
+        progress: record.progress,
+      }).catch((err) => {
+        console.warn('Firestore progress sync deferred:', err);
+      })
+    );
+  }
+
+  await Promise.all(tasks);
 
   if (options?.syncDrive !== false) {
     const driveRes = await saveProgressToDrive(record, options?.teacherFolderInput);

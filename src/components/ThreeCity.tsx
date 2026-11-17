@@ -51,6 +51,7 @@ interface ThreeCityProps {
   playerLevel?: number;
   solvedQuestions?: number;
   completedChapters?: number;
+  initialSpawn?: { x: number; z: number; yaw: number };
   onSelectChapter: (chapterId: number) => void;
   speakText: (text: string) => void;
 }
@@ -266,6 +267,7 @@ export default function ThreeCity({
   playerLevel = 1,
   solvedQuestions = 0,
   completedChapters = 0,
+  initialSpawn,
   onSelectChapter,
   speakText,
 }: ThreeCityProps) {
@@ -274,7 +276,11 @@ export default function ThreeCity({
   const analogBaseRef = useRef<HTMLDivElement>(null);
   const analogPointerIdRef = useRef<number | null>(null);
   const [knobPos, setKnobPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const playerPosRef = useRef<{ x: number; z: number; yaw: number }>({ x: 0, z: 12, yaw: Math.PI });
+  const playerPosRef = useRef<{ x: number; z: number; yaw: number }>({
+    x: initialSpawn?.x ?? 0,
+    z: initialSpawn?.z ?? 12,
+    yaw: initialSpawn?.yaw ?? Math.PI,
+  });
   const lastAnnouncedChapterRef = useRef<number | null>(null);
   const speakTextRef = useRef(speakText);
   speakTextRef.current = speakText;
@@ -283,13 +289,14 @@ export default function ThreeCity({
   const [onlinePlayers, setOnlinePlayers] = useState<OnlinePlayerState[]>([]);
   const [selfPlayerId, setSelfPlayerId] = useState<string | null>(null);
   const [isOnlineConnected, setIsOnlineConnected] = useState<boolean>(false);
+  const [isCloudConnected, setIsCloudConnected] = useState<boolean>(false);
   const [showOnlineList, setShowOnlineList] = useState<boolean>(false);
 
   const [nearbyChapter, setNearbyChapter] = useState<ChapterModule | null>(null);
   const [playerMiniPos, setPlayerMiniPos] = useState<{ x: number; z: number; yaw: number }>({
-    x: 0,
-    z: 12,
-    yaw: Math.PI,
+    x: initialSpawn?.x ?? 0,
+    z: initialSpawn?.z ?? 12,
+    yaw: initialSpawn?.yaw ?? Math.PI,
   });
   const [isLandscapePrompt, setIsLandscapePrompt] = useState<boolean>(false);
   const [timeMode, setTimeMode] = useState<TimeMode>('auto');
@@ -304,6 +311,7 @@ export default function ThreeCity({
   useEffect(() => {
     return multiplayerService.subscribeSync((snap) => {
       setIsOnlineConnected(snap.connected);
+      setIsCloudConnected(snap.cloudConnected);
       setSelfPlayerId(snap.selfId);
       setOnlinePlayers(snap.players);
     });
@@ -2131,10 +2139,17 @@ export default function ThreeCity({
           }`}
         >
           <div className="px-3 py-2 bg-slate-900/90 border-b border-white/10 flex items-center justify-between">
-            <div className="flex items-center space-x-1.5">
-              <Users className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-xs font-extrabold">
-                Pemain di Peta ({onlinePlayers.length})
+            <div className="flex flex-col">
+              <div className="flex items-center space-x-1.5">
+                <Users className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-xs font-extrabold">
+                  Pemain di Peta ({onlinePlayers.length})
+                </span>
+              </div>
+              <span className="text-[9px] text-slate-400">
+                {isCloudConnected
+                  ? 'Sinkronisasi Cloud Global (Lintas Link & HP)'
+                  : 'Mode Server Lokal • Login Google untuk sinkron lintas link'}
               </span>
             </div>
             <button
@@ -2155,6 +2170,9 @@ export default function ThreeCity({
                 .sort((a, b) => b.solvedQuestions - a.solvedQuestions)
                 .map((p) => {
                   const isMe = p.id === selfPlayerId;
+                  const distMeters = Math.round(
+                    Math.hypot(p.x - playerMiniPos.x, p.z - playerMiniPos.z)
+                  );
                   return (
                     <div
                       key={p.id}
@@ -2167,8 +2185,12 @@ export default function ThreeCity({
                       <div className="min-w-0">
                         <div className="text-[11px] font-bold text-white truncate flex items-center space-x-1">
                           <span className="truncate">{p.name}</span>
-                          {isMe && (
+                          {isMe ? (
                             <span className="text-[9px] text-emerald-300 font-black shrink-0">(Kamu)</span>
+                          ) : (
+                            <span className="text-[9px] text-sky-300 font-semibold shrink-0">
+                              • {distMeters}m
+                            </span>
                           )}
                         </div>
                         <div className="text-[10px] text-slate-400 truncate">
