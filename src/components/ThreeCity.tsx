@@ -43,6 +43,7 @@ function computePhase(mode: TimeMode, now: Date): DayPhase {
 interface ThreeCityProps {
   userProgress: Record<number, { solved: boolean; stars: number; attempts: number }>;
   kickedChapterId?: number | null;
+  isMobileLayout?: boolean;
   onSelectChapter: (chapterId: number) => void;
   speakText: (text: string) => void;
 }
@@ -201,6 +202,7 @@ function createNameTagTexture(name: string): THREE.CanvasTexture {
 export default function ThreeCity({
   userProgress,
   kickedChapterId = null,
+  isMobileLayout = false,
   onSelectChapter,
   speakText,
 }: ThreeCityProps) {
@@ -1738,12 +1740,14 @@ export default function ThreeCity({
     animate();
 
     const handleResize = () => {
-      if (!container) return;
+      if (!container || container.clientWidth === 0 || container.clientHeight === 0) return;
       camera.aspect = container.clientWidth / container.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
     };
     window.addEventListener('resize', handleResize);
+    const resizeObserver = new ResizeObserver(() => handleResize());
+    resizeObserver.observe(container);
 
     return () => {
       domEl.removeEventListener('pointerdown', onPointerDown);
@@ -1753,6 +1757,7 @@ export default function ThreeCity({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       cancelAnimationFrame(animationFrameId);
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
@@ -1761,7 +1766,11 @@ export default function ThreeCity({
   }, [userProgress]);
 
   return (
-    <div className="relative w-full h-full bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-indigo-500/30 flex flex-col select-none">
+    <div
+      className={`relative w-full h-full bg-slate-950 overflow-hidden flex flex-col select-none ${
+        isMobileLayout ? 'rounded-none border-0' : 'rounded-2xl shadow-2xl border border-indigo-500/30'
+      }`}
+    >
       {/* Mobile Landscape Prompt Overlay */}
       {isLandscapePrompt && (
         <div className="absolute inset-0 bg-slate-950/95 z-50 flex flex-col items-center justify-center p-6 text-center space-y-4">
@@ -1785,131 +1794,226 @@ export default function ThreeCity({
       <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing touch-none" />
 
       {/* TOP-LEFT HUD: ACTIVE VOICE AI QUEST GUIDE */}
-      <div className="absolute top-3 left-3 bg-slate-950/85 backdrop-blur-md px-4 py-3 rounded-2xl border border-indigo-500/40 text-white shadow-xl max-w-xs z-20 space-y-2">
-        <div className="flex items-center justify-between space-x-3">
-          <div className="flex items-center space-x-2">
-            <Navigation className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
-            <span className="text-[11px] font-black uppercase tracking-wider text-amber-300">
-              Misi Voice AI ({questDistance}m)
-            </span>
+      {isMobileLayout ? (
+        <div className="absolute top-2 left-2 bg-slate-950/75 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-indigo-500/40 text-white shadow-lg max-w-[162px] z-20 space-y-0.5">
+          <div className="flex items-center justify-between space-x-1.5">
+            <div className="flex items-center space-x-1 min-w-0">
+              <Navigation className="w-3 h-3 text-amber-400 shrink-0 animate-pulse" />
+              <span className="text-[10px] font-black text-amber-300 whitespace-nowrap">
+                {questDistance}m
+              </span>
+            </div>
+            <button
+              onClick={speakQuestGuide}
+              className="bg-indigo-600/90 hover:bg-indigo-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md flex items-center space-x-0.5 shrink-0"
+            >
+              <Volume2 className="w-2.5 h-2.5" />
+              <span>Pandu</span>
+            </button>
           </div>
-          <button
-            onClick={speakQuestGuide}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center space-x-1 transition"
-          >
-            <Volume2 className="w-3 h-3" />
-            <span>Pandu</span>
-          </button>
+          <p className="text-[10px] font-bold leading-tight text-white truncate">
+            {activeQuest.chapter.title}
+          </p>
         </div>
-        <p className="text-xs font-bold leading-snug text-white">{activeQuest.chapter.title}</p>
-        <p className="text-[10px] text-slate-300">
-          Geser layar kanan untuk kamera • Analog kiri (HP) / WASD (Laptop) untuk jalan
-        </p>
-      </div>
+      ) : (
+        <div className="absolute top-3 left-3 bg-slate-950/85 backdrop-blur-md px-4 py-3 rounded-2xl border border-indigo-500/40 text-white shadow-xl max-w-xs z-20 space-y-2">
+          <div className="flex items-center justify-between space-x-3">
+            <div className="flex items-center space-x-2">
+              <Navigation className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+              <span className="text-[11px] font-black uppercase tracking-wider text-amber-300">
+                Misi Voice AI ({questDistance}m)
+              </span>
+            </div>
+            <button
+              onClick={speakQuestGuide}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center space-x-1 transition"
+            >
+              <Volume2 className="w-3 h-3" />
+              <span>Pandu</span>
+            </button>
+          </div>
+          <p className="text-xs font-bold leading-snug text-white">{activeQuest.chapter.title}</p>
+          <p className="text-[10px] text-slate-300">
+            Geser layar kanan untuk kamera • Analog kiri (HP) / WASD (Laptop) untuk jalan
+          </p>
+        </div>
+      )}
 
       {/* TOP-RIGHT HUD: REAL-TIME DAY/NIGHT ATMOSPHERE CLOCK & PREVIEW */}
-      <div className="absolute top-3 right-3 bg-slate-950/85 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-indigo-500/40 text-white shadow-xl z-20 flex items-center space-x-2.5">
-        <div className="flex items-center space-x-1.5 text-xs font-bold">
+      <div
+        className={`absolute bg-slate-950/80 backdrop-blur-md border border-indigo-500/40 text-white shadow-xl z-20 flex items-center ${
+          isMobileLayout
+            ? 'top-2 right-2 px-2 py-1 rounded-xl space-x-1.5'
+            : 'top-3 right-3 px-3.5 py-2 rounded-2xl space-x-2.5'
+        }`}
+      >
+        <div className={`flex items-center space-x-1 font-bold ${isMobileLayout ? 'text-[10px]' : 'text-xs space-x-1.5'}`}>
           {currentPhase === 'night' ? (
-            <Moon className="w-4 h-4 text-sky-300" />
+            <Moon className={isMobileLayout ? 'w-3 h-3 text-sky-300' : 'w-4 h-4 text-sky-300'} />
           ) : currentPhase === 'sunset' ? (
-            <Sunrise className="w-4 h-4 text-amber-400" />
+            <Sunrise className={isMobileLayout ? 'w-3 h-3 text-amber-400' : 'w-4 h-4 text-amber-400'} />
           ) : (
-            <Sun className="w-4 h-4 text-yellow-300" />
+            <Sun className={isMobileLayout ? 'w-3 h-3 text-yellow-300' : 'w-4 h-4 text-yellow-300'} />
           )}
           <span>
             {currentPhase === 'night' ? 'Malam' : currentPhase === 'sunset' ? 'Sore' : 'Siang'}
           </span>
-          <span className="text-slate-400 flex items-center text-[11px] font-semibold">
-            <Clock className="w-3 h-3 mr-1" />
-            {clockText}
-          </span>
+          {!isMobileLayout && (
+            <span className="text-slate-400 flex items-center text-[11px] font-semibold">
+              <Clock className="w-3 h-3 mr-1" />
+              {clockText}
+            </span>
+          )}
         </div>
         <button
           onClick={() =>
             setTimeMode((prev) => (prev === 'auto' ? 'day' : prev === 'day' ? 'night' : 'auto'))
           }
-          className="bg-indigo-600/80 hover:bg-indigo-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition"
+          className={`bg-indigo-600/80 hover:bg-indigo-500 text-white font-bold rounded-lg transition ${
+            isMobileLayout ? 'text-[9px] px-1.5 py-0.5' : 'text-[10px] px-2.5 py-1'
+          }`}
           title="Ganti mode waktu (Otomatis Real-Time / Siang / Malam)"
         >
-          {timeMode === 'auto' ? 'Auto Real-Time' : timeMode === 'day' ? 'Mode Siang' : 'Mode Malam'}
+          {isMobileLayout
+            ? timeMode === 'auto'
+              ? 'Auto'
+              : timeMode === 'day'
+              ? 'Siang'
+              : 'Malam'
+            : timeMode === 'auto'
+            ? 'Auto Real-Time'
+            : timeMode === 'day'
+            ? 'Mode Siang'
+            : 'Mode Malam'}
         </button>
       </div>
 
       {/* KICKED BUILDING COOLDOWN TOP REMINDER */}
       {kickedChapterId !== null && (
-        <div className="absolute top-3 left-1/2 transform -translate-x-1/2 bg-rose-600/95 backdrop-blur-md text-white px-4 py-2 rounded-2xl border border-rose-300/60 shadow-xl z-20 flex items-center space-x-2 text-xs font-bold">
-          <Lock className="w-4 h-4 text-yellow-300 shrink-0" />
+        <div
+          className={`absolute left-1/2 transform -translate-x-1/2 bg-rose-600/95 backdrop-blur-md text-white border border-rose-300/60 shadow-xl z-20 flex items-center space-x-1.5 font-bold ${
+            isMobileLayout
+              ? 'top-11 px-2.5 py-1 rounded-xl text-[10px] whitespace-nowrap'
+              : 'top-3 px-4 py-2 rounded-2xl text-xs space-x-2'
+          }`}
+        >
+          <Lock className={isMobileLayout ? 'w-3 h-3 text-yellow-300 shrink-0' : 'w-4 h-4 text-yellow-300 shrink-0'} />
           <span>
-            Bab {kickedChapterId} dikunci sementara karena salah jawab! Cari & bangun gedung bab lain dahulu.
+            {isMobileLayout
+              ? `Bab ${kickedChapterId} dikunci! Cari gedung lain.`
+              : `Bab ${kickedChapterId} dikunci sementara karena salah jawab! Cari & bangun gedung bab lain dahulu.`}
           </span>
         </div>
       )}
 
       {/* BOTTOM-LEFT HUD: SMOOTH 360-DEGREE ANALOG JOYSTICK (NO BUTTONS, FOR MOBILE THUMB) */}
-      <div className="absolute bottom-4 left-4 z-30 flex flex-col items-center space-y-1.5 select-none">
+      <div
+        className={`absolute z-30 flex flex-col items-center space-y-1.5 select-none ${
+          isMobileLayout ? 'bottom-3 left-3' : 'bottom-4 left-4'
+        }`}
+      >
         <div
           ref={analogBaseRef}
           onPointerDown={handleAnalogPointerDown}
           onPointerMove={handleAnalogPointerMove}
           onPointerUp={handleAnalogPointerUp}
           onPointerCancel={handleAnalogPointerUp}
-          className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-slate-950/75 backdrop-blur-md border-2 border-indigo-400/50 shadow-2xl flex items-center justify-center touch-none cursor-pointer"
+          className={`relative rounded-full bg-slate-950/70 backdrop-blur-md border-2 border-indigo-400/50 shadow-2xl flex items-center justify-center touch-none cursor-pointer ${
+            isMobileLayout ? 'w-24 h-24' : 'w-28 h-28 sm:w-32 sm:h-32'
+          }`}
         >
           {/* Inner subtle guide ring */}
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border border-white/15 pointer-events-none" />
+          <div
+            className={`rounded-full border border-white/15 pointer-events-none ${
+              isMobileLayout ? 'w-14 h-14' : 'w-16 h-16 sm:w-20 sm:h-20'
+            }`}
+          />
           {/* Draggable Analog Thumb Knob */}
           <div
             style={{
               transform: `translate(${knobPos.x}px, ${knobPos.y}px)`,
             }}
-            className="absolute w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-500 to-sky-400 border-2 border-white/85 shadow-xl pointer-events-none flex items-center justify-center"
+            className={`absolute rounded-full bg-gradient-to-tr from-blue-600 via-indigo-500 to-sky-400 border-2 border-white/85 shadow-xl pointer-events-none flex items-center justify-center ${
+              isMobileLayout ? 'w-10 h-10' : 'w-12 h-12 sm:w-14 sm:h-14'
+            }`}
           >
-            <div className="w-4 h-4 rounded-full bg-white/40" />
+            <div className="w-3.5 h-3.5 rounded-full bg-white/40" />
           </div>
         </div>
-        <span className="text-[10px] font-bold text-slate-200 bg-slate-950/75 px-2.5 py-0.5 rounded-full border border-white/10 pointer-events-none">
-          Analog (HP) • WASD (Laptop)
-        </span>
+        {!isMobileLayout && (
+          <span className="text-[10px] font-bold text-slate-200 bg-slate-950/75 px-2.5 py-0.5 rounded-full border border-white/10 pointer-events-none">
+            Analog (HP) • WASD (Laptop)
+          </span>
+        )}
       </div>
 
       {/* NEARBY BUILDING ENTRY PROMPT */}
       {nearbyChapter && (
         nearbyChapter.id === kickedChapterId ? (
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-rose-700 to-red-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-rose-300/40 flex items-center space-x-3 z-30">
-            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
-              <Lock className="w-5 h-5 text-yellow-300" />
+          <div
+            className={`absolute left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-rose-700 to-red-600 text-white shadow-2xl border border-rose-300/40 flex items-center z-30 ${
+              isMobileLayout
+                ? 'bottom-3 px-3 py-2 rounded-2xl space-x-2 max-w-[230px]'
+                : 'bottom-6 px-5 py-3.5 rounded-3xl space-x-3'
+            }`}
+          >
+            <div className={`bg-white/20 rounded-xl shrink-0 ${isMobileLayout ? 'p-1.5' : 'p-2 rounded-2xl'}`}>
+              <Lock className={isMobileLayout ? 'w-4 h-4 text-yellow-300' : 'w-5 h-5 text-yellow-300'} />
             </div>
             <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title} (Terkunci)</h3>
-              <p className="text-[11px] text-rose-100">
-                Kamu baru saja di-kick karena salah menjawab! Cari gedung lain dulu.
-              </p>
+              <h3 className={isMobileLayout ? 'text-[11px] font-black truncate' : 'text-xs sm:text-sm font-black truncate'}>
+                {nearbyChapter.title} (Terkunci)
+              </h3>
+              {!isMobileLayout && (
+                <p className="text-[11px] text-rose-100">
+                  Kamu baru saja di-kick karena salah menjawab! Cari gedung lain dulu.
+                </p>
+              )}
             </div>
           </div>
         ) : (
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 text-white px-5 py-3.5 rounded-3xl shadow-2xl border border-white/30 flex items-center space-x-3 z-30">
-            <div className="bg-white/20 p-2 rounded-2xl shrink-0">
-              <Play className="w-5 h-5 text-yellow-300 fill-yellow-300" />
-            </div>
+          <div
+            className={`absolute left-1/2 transform -translate-x-1/2 bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 text-white shadow-2xl border border-white/30 flex items-center z-30 ${
+              isMobileLayout
+                ? 'bottom-3 px-3 py-2 rounded-2xl space-x-2 max-w-[245px]'
+                : 'bottom-6 px-5 py-3.5 rounded-3xl space-x-3'
+            }`}
+          >
+            {!isMobileLayout && (
+              <div className="bg-white/20 p-2 rounded-2xl shrink-0">
+                <Play className="w-5 h-5 text-yellow-300 fill-yellow-300" />
+              </div>
+            )}
             <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-black truncate">{nearbyChapter.title}</h3>
-              <p className="text-[11px] text-indigo-100 flex items-center">
-                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-300" /> Pintu Gedung Terbuka!
-              </p>
+              <h3 className={isMobileLayout ? 'text-[11px] font-black truncate' : 'text-xs sm:text-sm font-black truncate'}>
+                {nearbyChapter.title}
+              </h3>
+              {!isMobileLayout && (
+                <p className="text-[11px] text-indigo-100 flex items-center">
+                  <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-300" /> Pintu Gedung Terbuka!
+                </p>
+              )}
             </div>
             <button
               onClick={() => onSelectChapter(nearbyChapter.id)}
-              className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black px-4 py-2 rounded-2xl shadow-lg transition transform hover:scale-105 text-xs shrink-0"
+              className={`bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black shadow-lg transition transform hover:scale-105 shrink-0 ${
+                isMobileLayout ? 'px-2.5 py-1.5 rounded-xl text-[10px]' : 'px-4 py-2 rounded-2xl text-xs'
+              }`}
             >
-              MASUK GEDUNG
+              {isMobileLayout ? 'MASUK' : 'MASUK GEDUNG'}
             </button>
           </div>
         )
       )}
 
       {/* BOTTOM-RIGHT HUD: GTA-STYLE MINI-MAP RADAR */}
-      <div className="absolute bottom-4 right-4 w-32 h-32 sm:w-40 sm:h-40 bg-slate-950/85 backdrop-blur-md rounded-full border-4 border-slate-700/90 shadow-2xl overflow-hidden z-20 pointer-events-none">
+      <div
+        className={`absolute bg-slate-950/80 backdrop-blur-md rounded-full border-slate-700/90 shadow-2xl overflow-hidden z-20 pointer-events-none ${
+          isMobileLayout
+            ? 'bottom-3 right-3 w-24 h-24 border-2'
+            : 'bottom-4 right-4 w-32 h-32 sm:w-40 sm:h-40 border-4'
+        }`}
+      >
         <svg viewBox="-68 -68 136 136" className="w-full h-full">
           {/* Radar Background */}
           <circle cx="0" cy="0" r="68" fill="#14532d" opacity="0.45" />
@@ -1978,9 +2082,11 @@ export default function ThreeCity({
             <polygon points="0,-5.5 4,4 0,2 -4,4" fill="#38bdf8" stroke="#ffffff" strokeWidth="1" />
           </g>
         </svg>
-        <div className="absolute bottom-1 inset-x-0 text-center text-[9px] font-bold text-slate-300 pointer-events-none">
-          PETA KOTA (11 BAB)
-        </div>
+        {!isMobileLayout && (
+          <div className="absolute bottom-1 inset-x-0 text-center text-[9px] font-bold text-slate-300 pointer-events-none">
+            PETA KOTA (11 BAB)
+          </div>
+        )}
       </div>
     </div>
   );
