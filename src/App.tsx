@@ -372,23 +372,7 @@ export default function App() {
   const handleSaveToGoogle = async () => {
     if (!studentName) return;
     try {
-      let currentEmail = studentEmail;
-      let token = await getAccessToken();
-
-      // If student hasn't linked Google Drive token in this session yet, trigger browser Google Sign-In
-      if (!token) {
-        try {
-          const res = await googleSignIn();
-          if (res?.user?.email) {
-            currentEmail = res.user.email;
-            setStudentEmail(currentEmail);
-            token = res.accessToken;
-          }
-        } catch {
-          // Continue saving to server cloud & local browser storage even if Drive popup cancelled
-        }
-      }
-
+      const currentEmail = studentEmail || `${studentName.toLowerCase().replace(/\s+/g, '')}@smp.id`;
       const key = buildAccountKey(currentEmail, studentName, studentSchool, studentClass);
       const record: SavedStudentRecord = {
         accountKey: key,
@@ -403,24 +387,18 @@ export default function App() {
       };
 
       saveActiveSessionMeta(record);
-      const syncRes = await syncStudentRecordAll(record, {
-        syncDrive: Boolean(token),
+      await syncStudentRecordAll(record, {
+        syncDrive: false,
         teacherFolderInput: teacherFolderValue,
       });
 
-      setSaveToastMsg(
-        syncRes.driveSynced
-          ? `Tersimpan di Google Drive (${currentEmail}) & Arsip Guru!`
-          : `Progres Disimpan di Cloud & Browser (${currentEmail || studentName})!`
-      );
-      speakText(
-        syncRes.driveSynced
-          ? 'Progres belajar dan dekorasi gedung berhasil disimpan ke Google Drive siswa dan Google Drive guru!'
-          : 'Progres belajar dan dekorasi gedung kota Anda berhasil disinkronkan dan disimpan!'
-      );
+      setSaveToastMsg(`Progres berhasil disimpan otomatis ke Arsip Cloud Guru (${studentName})!`);
+      speakText('Progres belajar dan dekorasi gedung kota Anda berhasil disimpan otomatis ke arsip cloud guru.');
       setTimeout(() => setSaveToastMsg(''), 4000);
     } catch (e) {
       console.error(e);
+      setSaveToastMsg(`Progres disimpan di perangkat (${studentName}).`);
+      setTimeout(() => setSaveToastMsg(''), 3000);
     }
   };
 

@@ -76,8 +76,6 @@ export default function StudyModal({
   const [isKickingOut, setIsKickingOut] = useState<boolean>(false);
 
   // Google Drive Work Upload states per question
-  const [needsGoogleAuth, setNeedsGoogleAuth] = useState<boolean>(true);
-  const [isSigningInDrive, setIsSigningInDrive] = useState<boolean>(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [workNotes, setWorkNotes] = useState<string>('');
   const [confirmUploadOpen, setConfirmUploadOpen] = useState<boolean>(false);
@@ -87,19 +85,6 @@ export default function StudyModal({
 
   const currentQ: Question = cQuestions[currentQIndex] || cQuestions[0];
   const solvedCountInChapter = cQuestions.filter((q) => userProgress[q.id]?.solved).length;
-
-  useEffect(() => {
-    const checkToken = async () => {
-      const t = await getAccessToken();
-      setNeedsGoogleAuth(!t);
-    };
-    checkToken();
-    const unsub = initAuth(
-      () => setNeedsGoogleAuth(false),
-      () => setNeedsGoogleAuth(true)
-    );
-    return () => unsub();
-  }, []);
 
   useEffect(() => {
     setHintLevel(0);
@@ -114,32 +99,10 @@ export default function StudyModal({
     setConfirmUploadOpen(false);
   }, [currentQ]);
 
-  const handleDriveSignIn = async () => {
-    setIsSigningInDrive(true);
-    setUploadError('');
-    try {
-      const res = await googleSignIn();
-      if (res?.accessToken) {
-        setNeedsGoogleAuth(false);
-      }
-    } catch (err: any) {
-      setUploadError(
-        err?.message ||
-          'Gagal menghubungkan akun Google browsermu. Silakan izinkan popup lalu coba lagi.'
-      );
-    } finally {
-      setIsSigningInDrive(false);
-    }
-  };
-
   const handleRequestUpload = () => {
     setUploadError('');
     if (!selectedFile && !workNotes.trim()) {
       setUploadError('Silakan pilih foto/PDF cara pengerjaan atau tulis langkah pengerjaanmu terlebih dahulu.');
-      return;
-    }
-    if (needsGoogleAuth) {
-      setUploadError('Silakan tekan tombol "Sign in with Google" di bawah terlebih dahulu agar file terkirim lewat akun Google browsermu.');
       return;
     }
     setConfirmUploadOpen(true);
@@ -171,16 +134,12 @@ export default function StudyModal({
       });
       setUploadedByQuestion((prev) => ({ ...prev, [currentQ.id]: res }));
       setSelectedFile(null);
+      setWorkNotes('');
       speakText(
-        `Mantap ${studentName}! Cara pengerjaan soal nomor ${currentQ.numberInChapter} sudah tercatat rapi dan terkirim ke Google Drive guru.`
+        `Mantap ${studentName}! Cara pengerjaan soal nomor ${currentQ.numberInChapter} sudah tercatat rapi dan terkirim ke arsip Google Drive guru.`
       );
     } catch (err: any) {
-      if (err?.message === 'NEED_GOOGLE_AUTH') {
-        setNeedsGoogleAuth(true);
-        setUploadError('Sesi Google Drive belum aktif. Silakan klik Sign in with Google.');
-      } else {
-        setUploadError(err?.message || 'Gagal mengunggah ke Google Drive.');
-      }
+      setUploadError(err?.message || 'Gagal mengunggah hasil pengerjaan.');
     } finally {
       setIsUploading(false);
     }
@@ -497,21 +456,7 @@ export default function StudyModal({
                   )}
                 </div>
 
-                {needsGoogleAuth && (
-                  <div className="bg-white p-4 rounded-2xl border border-blue-200 space-y-2.5">
-                    <p className="text-xs font-semibold text-slate-800">
-                      Hubungkan akun Google aktif di browsermu untuk mengirim file cara pengerjaan ke Google Drive guru:
-                    </p>
-                    <GoogleSignInButton
-                      onClick={handleDriveSignIn}
-                      disabled={isSigningInDrive}
-                      label={isSigningInDrive ? 'Menghubungkan Akun Google...' : 'Sign in with Google'}
-                    />
-                    <p className="text-[11px] text-slate-500 leading-relaxed">
-                      Jika muncul layar <em>&quot;Google belum memverifikasi aplikasi ini&quot;</em>, klik <strong>Lanjutan (Advanced)</strong> lalu klik <strong>Buka ...firebaseapp.com</strong> untuk melanjutkan kirim ke Drive.
-                    </p>
-                  </div>
-                )}
+
 
                 <div className="space-y-1">
                   <label className="text-[11px] font-bold text-slate-800 flex items-center">
