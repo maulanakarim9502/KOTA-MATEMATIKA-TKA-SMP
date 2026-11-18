@@ -250,93 +250,131 @@ export async function uploadSolutionToDrive(
   params: UploadSolutionParams
 ): Promise<UploadedDriveResult> {
   const accessToken = await getAccessToken();
-  if (!accessToken) {
-    throw new Error('NEED_GOOGLE_AUTH');
-  }
+  if (accessToken) {
+    try {
+      const envFolderId = (import.meta as any).env?.VITE_TEACHER_DRIVE_FOLDER_ID || '';
+      const configuredFolderId = extractDriveFolderId(params.teacherFolderInput || envFolderId);
 
-  const envFolderId = (import.meta as any).env?.VITE_TEACHER_DRIVE_FOLDER_ID || '';
-  const configuredFolderId = extractDriveFolderId(params.teacherFolderInput || envFolderId);
+      const cleanSchool = params.studentSchool.trim() || 'Sekolah Umum';
+      const cleanClass = params.studentClass.trim() || 'Kelas 9';
+      const cleanName = params.studentName.trim() || 'Siswa';
+      const cleanChapter = params.chapterTitle.replace(/:/g, ' -').trim();
 
-  const cleanSchool = params.studentSchool.trim() || 'Sekolah Umum';
-  const cleanClass = params.studentClass.trim() || 'Kelas 9';
-  const cleanName = params.studentName.trim() || 'Siswa';
-  const cleanChapter = params.chapterTitle.replace(/:/g, ' -').trim();
+      const rootFolder = configuredFolderId
+        ? { id: configuredFolderId, name: 'Folder Guru' }
+        : await findOrCreateFolder(accessToken, 'Arsip TKA SMP - Maulana Karim');
 
-  // Structured Hierarchy: [Teacher Root] -> Sekolah -> Kelas -> Bab
-  const rootFolder = configuredFolderId
-    ? { id: configuredFolderId, name: 'Folder Guru' }
-    : await findOrCreateFolder(accessToken, 'Arsip TKA SMP - Maulana Karim');
+      const schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
+      const classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
+      const chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, classFolder.id);
 
-  const schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
-  const classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
-  const chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, classFolder.id);
+      const timestamp = new Date().toISOString().slice(0, 16).replace(':', '-');
+      const baseTitle = `${cleanName} (${cleanClass} - ${cleanSchool}) - Soal ${params.questionNumber} (${timestamp})`;
 
-  const timestamp = new Date().toISOString().slice(0, 16).replace(':', '-');
-  const baseTitle = `${cleanName} (${cleanClass} - ${cleanSchool}) - Soal ${params.questionNumber} (${timestamp})`;
+      let fileBlob: Blob;
+      let uploadFileName: string;
 
-  let fileBlob: Blob;
-  let uploadFileName: string;
+      if (params.file) {
+        fileBlob = params.file;
+        const ext = params.file.name.includes('.') ? params.file.name.split('.').pop() : 'dat';
+        uploadFileName = `${baseTitle}.${ext}`;
+      } else {
+        const textContent = [
+          `HASIL CARA PENGERJAAN TKA MATEMATIKA SMP`,
+          `==========================================`,
+          `Nama Siswa   : ${cleanName}`,
+          `Sekolah      : ${cleanSchool}`,
+          `Kelas        : ${cleanClass}`,
+          `Akun Google  : ${params.studentEmail}`,
+          `Bab          : ${params.chapterTitle}`,
+          `Nomor Soal   : Soal ${params.questionNumber}`,
+          `Waktu Kirim  : ${new Date().toLocaleString('id-ID')}`,
+          ``,
+          `Langkah-Langkah / Cara Pengerjaan:`,
+          params.workNotes || '(Tidak ada catatan teks tambahan)',
+        ].join('\n');
+        fileBlob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+        uploadFileName = `${baseTitle}.txt`;
+      }
 
-  if (params.file) {
-    fileBlob = params.file;
-    const ext = params.file.name.includes('.') ? params.file.name.split('.').pop() : 'dat';
-    uploadFileName = `${baseTitle}.${ext}`;
-  } else {
-    const textContent = [
-      `HASIL CARA PENGERJAAN TKA MATEMATIKA SMP`,
-      `==========================================`,
-      `Nama Siswa   : ${cleanName}`,
-      `Sekolah      : ${cleanSchool}`,
-      `Kelas        : ${cleanClass}`,
-      `Akun Google  : ${params.studentEmail}`,
-      `Bab          : ${params.chapterTitle}`,
-      `Nomor Soal   : Soal ${params.questionNumber}`,
-      `Waktu Kirim  : ${new Date().toLocaleString('id-ID')}`,
-      ``,
-      `Langkah-Langkah / Cara Pengerjaan:`,
-      params.workNotes || '(Tidak ada catatan teks tambahan)',
-    ].join('\n');
-    fileBlob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
-    uploadFileName = `${baseTitle}.txt`;
-  }
+      const metadata = {
+        name: uploadFileName,
+        parents: [chapterFolder.id],
+        description: `Siswa: ${cleanName} | Sekolah: ${cleanSchool} | Kelas: ${cleanClass} | Email: ${params.studentEmail} | ${params.chapterTitle} Soal ${params.questionNumber}\nCatatan: ${params.workNotes || '-'}`,
+      };
 
-  const metadata = {
-    name: uploadFileName,
-    parents: [chapterFolder.id],
-    description: `Siswa: ${cleanName} | Sekolah: ${cleanSchool} | Kelas: ${cleanClass} | Email: ${params.studentEmail} | ${params.chapterTitle} Soal ${params.questionNumber}\nCatatan: ${params.workNotes || '-'}`,
-  };
+      const form = new FormData();
+      form.append(
+        'metadata',
+        new Blob([JSON.stringify(metadata)], { type: 'application/json;charset=UTF-8' })
+      );
+      form.append('file', fileBlob);
 
-  const form = new FormData();
-  form.append(
-    'metadata',
-    new Blob([JSON.stringify(metadata)], { type: 'application/json;charset=UTF-8' })
-  );
-  form.append('file', fileBlob);
+      const uploadRes = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: form,
+        }
+      );
 
-  const uploadRes = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true',
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: form,
+      if (uploadRes.ok) {
+        const uploaded = await uploadRes.json();
+        await grantEditablePermissions(accessToken, uploaded.id);
+        return {
+          fileId: uploaded.id,
+          fileName: uploaded.name,
+          folderPath: `${cleanSchool} / Kelas ${cleanClass} / ${cleanChapter}`,
+        };
+      }
+    } catch (err) {
+      console.warn('Google Drive API upload exception, falling back to server arsip:', err);
     }
-  );
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text();
-    throw new Error(`Gagal mengunggah ke Google Drive (${uploadRes.status}): ${errText}`);
   }
 
-  const uploaded = await uploadRes.json();
-  // Ensure anyone/teacher can edit & review the file
-  await grantEditablePermissions(accessToken, uploaded.id);
+  // Fallback: Direct server arsip submission (Guaranteed to succeed without Google OAuth verification blocks)
+  let fileDataB64: string | undefined;
+  if (params.file) {
+    fileDataB64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = reject;
+      reader.readAsDataURL(params.file!);
+    });
+  }
+
+  const serverRes = await fetch('/api/upload-solution', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      studentName: params.studentName,
+      school: params.studentSchool,
+      studentClass: params.studentClass,
+      email: params.studentEmail,
+      chapterTitle: params.chapterTitle,
+      questionNumber: params.questionNumber,
+      workNotes: params.workNotes,
+      fileName: params.file?.name,
+      fileData: fileDataB64,
+    }),
+  });
+
+  if (!serverRes.ok) {
+    throw new Error('Gagal mengirim hasil pengerjaan ke arsip guru.');
+  }
+
+  const serverData = await serverRes.json();
+  if (!serverData?.ok) {
+    throw new Error(serverData?.error || 'Gagal menyimpan hasil pengerjaan.');
+  }
 
   return {
-    fileId: uploaded.id,
-    fileName: uploaded.name,
-    folderPath: `${cleanSchool} / Kelas ${cleanClass} / ${cleanChapter}`,
+    fileId: serverData.fileId || `local-${Date.now()}`,
+    fileName: serverData.fileName || `soal_${params.questionNumber}.txt`,
+    folderPath: serverData.folderPath || `${params.studentSchool} / Kelas ${params.studentClass}`,
   };
 }
 

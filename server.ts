@@ -339,6 +339,66 @@ async function startServer() {
     res.json({ ok: true, record: updated });
   });
 
+  app.post('/api/upload-solution', (req, res) => {
+    try {
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+      const studentName = sanitizeText(body.studentName, 40, 'Siswa');
+      const school = sanitizeText(body.school, 50, 'Sekolah Umum');
+      const studentClass = sanitizeText(body.studentClass, 16, 'Kelas 9');
+      const email = sanitizeText(body.email, 80, '');
+      const chapterTitle = sanitizeText(body.chapterTitle, 60, 'Bab');
+      const questionNumber = Number(body.questionNumber) || 1;
+      const workNotes = sanitizeText(body.workNotes, 2000, '');
+      const fileName = sanitizeText(body.fileName, 100, `soal_${questionNumber}.txt`);
+      const fileDataB64 = typeof body.fileData === 'string' ? body.fileData : '';
+
+      const subsDir = path.resolve(import.meta.dirname, '.data', 'submissions');
+      const cleanSchool = school.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
+      const cleanClass = studentClass.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
+      const cleanStudent = studentName.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
+      const cleanChapter = chapterTitle.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
+
+      const targetDir = path.join(subsDir, cleanSchool, cleanClass, cleanStudent, cleanChapter);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const timestamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const finalFileName = `${timestamp}_${fileName}`;
+      const fullFilePath = path.join(targetDir, finalFileName);
+
+      if (fileDataB64) {
+        const base64Clean = fileDataB64.includes(',') ? fileDataB64.split(',')[1] : fileDataB64;
+        const buffer = Buffer.from(base64Clean, 'base64');
+        fs.writeFileSync(fullFilePath, buffer);
+      } else {
+        const textContent = [
+          `HASIL CARA PENGERJAAN TKA MATEMATIKA SMP (MAULANA KARIM)`,
+          `======================================================`,
+          `Nama Siswa   : ${studentName}`,
+          `Sekolah      : ${school}`,
+          `Kelas        : ${studentClass}`,
+          `Email        : ${email}`,
+          `Bab          : ${chapterTitle}`,
+          `Nomor Soal   : Soal ${questionNumber}`,
+          `Waktu Kirim  : ${new Date().toLocaleString('id-ID')}`,
+          ``,
+          `Catatan Langkah Pengerjaan:`,
+          workNotes || '(Tidak ada catatan teks)',
+        ].join('\n');
+        fs.writeFileSync(fullFilePath, textContent, 'utf-8');
+      }
+
+      res.json({
+        ok: true,
+        fileId: `local-${Date.now()}`,
+        fileName: finalFileName,
+        folderPath: `${school} / Kelas ${studentClass} / ${cleanChapter}`,
+      });
+    } catch (err) {
+      console.error('Failed to save submission on server:', err);
+      res.status(500).json({ ok: false, error: 'Gagal menyimpan file ke server.' });
+    }
+  });
+
   const wss = new WebSocketServer({ server, path: '/ws/city' });
 
   wss.on('connection', (ws) => {
