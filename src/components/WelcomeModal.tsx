@@ -20,7 +20,7 @@ import {
 import GoogleSignInButton from './GoogleSignInButton';
 import {
   buildAccountKey,
-  googleBasicSignIn,
+  googleSignIn,
   loadBestStudentRecord,
   StudentProgressMap,
   subscribeFirebaseUser,
@@ -100,7 +100,7 @@ export default function WelcomeModal({ onLoginSuccess, speakText }: WelcomeModal
     setIsConnecting(true);
     setAuthError('');
     try {
-      const res = await googleBasicSignIn();
+      const res = await googleSignIn();
       if (!res?.user) return;
 
       const gEmail = res.user.email || emailInput;

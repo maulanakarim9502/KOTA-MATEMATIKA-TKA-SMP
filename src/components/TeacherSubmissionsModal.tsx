@@ -16,13 +16,19 @@ import {
   CheckCircle2,
   Loader2,
   ZoomIn,
+  FolderPlus,
 } from 'lucide-react';
 import { CHAPTERS_DATA } from '../data/tkaData';
 import {
   isVerifiedFirebaseUser,
   listStudentSubmissionsFirestore,
 } from '../services/firestoreService';
-import { TEACHER_EMAIL } from '../services/googleDriveService';
+import {
+  createAndShareTeacherDriveFolder,
+  fetchGlobalTeacherDriveConfig,
+  saveGlobalTeacherDriveConfig,
+  TEACHER_EMAIL,
+} from '../services/googleDriveService';
 
 export interface UnifiedSubmissionItem {
   id: string;
@@ -40,6 +46,7 @@ export interface UnifiedSubmissionItem {
   sizeBytes: number;
   folderPath: string;
   fileUrl: string;
+  driveUrl: string;
   submittedAt: number;
 }
 
@@ -69,7 +76,9 @@ export default function TeacherSubmissionsModal({
   const [searchText, setSearchText] = useState<string>('');
   const [filterChapter, setFilterChapter] = useState<number>(0);
   const [previewItem, setPreviewItem] = useState<UnifiedSubmissionItem | null>(null);
-  const [savedBanner, setSavedBanner] = useState<boolean>(false);
+  const [savedBanner, setSavedBanner] = useState<string>('');
+  const [driveConfigBusy, setDriveConfigBusy] = useState<boolean>(false);
+  const [driveConfigErr, setDriveConfigErr] = useState<string>('');
 
   const loadSubmissions = async () => {
     setIsLoading(true);
@@ -77,14 +86,19 @@ export default function TeacherSubmissionsModal({
     try {
       const mergedMap = new Map<string, UnifiedSubmissionItem>();
 
-      const [serverRes, fsList] = await Promise.all([
+      const [serverRes, fsList, globalCfg] = await Promise.all([
         fetch('/api/submissions')
           .then(async (r) => (r.ok ? r.json() : null))
           .catch(() => null),
         isVerifiedFirebaseUser()
           ? listStudentSubmissionsFirestore().catch(() => [])
           : Promise.resolve([]),
+        fetchGlobalTeacherDriveConfig().catch(() => null),
       ]);
+
+      if (globalCfg?.folderUrl && !teacherFolderValue) {
+        onChangeTeacherFolder(globalCfg.folderUrl);
+      }
 
       if (serverRes?.ok && Array.isArray(serverRes.submissions)) {
         for (const s of serverRes.submissions) {
@@ -105,6 +119,7 @@ export default function TeacherSubmissionsModal({
             sizeBytes: Number(s.sizeBytes || 0),
             folderPath: String(s.folderPath || ''),
             fileUrl: String(s.fileUrl || ''),
+            driveUrl: String(s.driveUrl || ''),
             submittedAt: Number(s.submittedAt || Date.now()),
           });
         }
@@ -112,7 +127,12 @@ export default function TeacherSubmissionsModal({
 
       for (const f of fsList) {
         const existing = mergedMap.get(f.id);
-        if (existing) continue;
+        if (existing) {
+          if (!existing.driveUrl && f.driveUrl) {
+            existing.driveUrl = f.driveUrl;
+          }
+          continue;
+        }
         const fallbackUrl = f.serverFilePath
           ? `/api/submissions/file?path=${encodeURIComponent(f.serverFilePath)}`
           : '';
@@ -132,6 +152,7 @@ export default function TeacherSubmissionsModal({
           sizeBytes: 0,
           folderPath: f.folderPath,
           fileUrl: fallbackUrl,
+          driveUrl: f.driveUrl || '',
           submittedAt: f.createdAt,
         });
       }
@@ -355,16 +376,29 @@ export default function TeacherSubmissionsModal({
                           <span className="text-[11px] text-slate-500 truncate">
                             {item.fileName || item.folderPath}
                           </span>
-                          {item.fileUrl && (
-                            <a
-                              href={item.fileUrl}
-                              download={item.fileName || 'hasil_siswa'}
-                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center space-x-1 shrink-0"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Unduh</span>
-                            </a>
-                          )}
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            {item.driveUrl && (
+                              <a
+                                href={item.driveUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center space-x-1"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Drive</span>
+                              </a>
+                            )}
+                            {item.fileUrl && (
+                              <a
+                                href={item.fileUrl}
+                                download={item.fileName || 'hasil_siswa'}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center space-x-1"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Unduh</span>
+                              </a>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );
@@ -373,36 +407,103 @@ export default function TeacherSubmissionsModal({
               )}
             </>
           ) : (
-            <div className="space-y-4 max-w-lg">
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Khusus akun guru ({TEACHER_EMAIL}). Tempelkan link atau ID folder induk Google Drive tujuan jika siswa login dengan izin Drive dan ingin file juga tersinkron ke folder tersebut (disusun otomatis per Sekolah → Kelas → Bab).
-              </p>
-              <input
-                type="text"
-                value={teacherFolderValue}
-                onChange={(e) => {
-                  setSavedBanner(false);
-                  onChangeTeacherFolder(e.target.value);
-                }}
-                placeholder="Contoh: https://drive.google.com/drive/folders/..."
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-950 bg-white focus:outline-none focus:border-amber-500"
-              />
-              {savedBanner && (
-                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-2.5 rounded-xl font-bold flex items-center space-x-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Pengaturan Folder Drive Guru tersimpan.</span>
+            <div className="space-y-4 max-w-xl">
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2.5">
+                <h4 className="font-extrabold text-sm text-amber-950">
+                  Cara Termudah: Buat Folder Tugas Otomatis di Google Drive Anda
+                </h4>
+                <p className="text-xs text-amber-900 leading-relaxed">
+                  Klik tombol di bawah untuk membuat folder khusus di Google Drive akun guru ({TEACHER_EMAIL}) dan otomatis membuka izin tulis agar semua siswa bisa menulis langsung file fotonya ke Drive Anda.
+                </p>
+                <button
+                  type="button"
+                  disabled={driveConfigBusy}
+                  onClick={async () => {
+                    setDriveConfigBusy(true);
+                    setDriveConfigErr('');
+                    setSavedBanner('');
+                    try {
+                      const cfg = await createAndShareTeacherDriveFolder();
+                      onChangeTeacherFolder(cfg.folderUrl);
+                      onSaveTeacherFolder();
+                      setSavedBanner(
+                        `Folder Google Drive "${cfg.folderName}" berhasil dibuat, dibuka untuk kiriman siswa, & disinkronkan ke semua siswa!`
+                      );
+                    } catch (err: any) {
+                      setDriveConfigErr(err?.message || 'Gagal membuat folder Google Drive otomatis.');
+                    } finally {
+                      setDriveConfigBusy(false);
+                    }
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow"
+                >
+                  {driveConfigBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FolderPlus className="w-4 h-4" />
+                  )}
+                  <span>
+                    {driveConfigBusy
+                      ? 'Membuat Folder & Mengatur Izin...'
+                      : 'Buat Otomatis & Bagikan Folder Tugas di Drive Saya'}
+                  </span>
+                </button>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-200">
+                <label className="text-xs font-extrabold text-slate-900 block">
+                  Atau Tempel Link / ID Folder Google Drive yang Sudah Ada:
+                </label>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  Pastikan di Google Drive folder tersebut disetel Bagikan: <strong>Siapa saja yang memiliki link → Editor</strong> agar siswa bisa langsung menulis ke dalam folder Anda (disusun rapi per Sekolah → Kelas → Nama Siswa → Bab).
+                </p>
+                <input
+                  type="text"
+                  value={teacherFolderValue}
+                  onChange={(e) => {
+                    setSavedBanner('');
+                    setDriveConfigErr('');
+                    onChangeTeacherFolder(e.target.value);
+                  }}
+                  placeholder="Contoh: https://drive.google.com/drive/folders/..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-950 bg-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {driveConfigErr && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-3 rounded-xl font-medium">
+                  {driveConfigErr}
                 </div>
               )}
+
+              {savedBanner && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs p-3 rounded-xl font-bold flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{savedBanner}</span>
+                </div>
+              )}
+
               <div className="flex justify-end space-x-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    onSaveTeacherFolder();
-                    setSavedBanner(true);
+                  disabled={driveConfigBusy}
+                  onClick={async () => {
+                    setDriveConfigBusy(true);
+                    setDriveConfigErr('');
+                    try {
+                      const cfg = await saveGlobalTeacherDriveConfig(teacherFolderValue);
+                      if (cfg.folderUrl) onChangeTeacherFolder(cfg.folderUrl);
+                      onSaveTeacherFolder();
+                      setSavedBanner('Pengaturan Folder Drive Guru tersimpan secara global untuk semua siswa.');
+                    } catch (err: any) {
+                      setDriveConfigErr(err?.message || 'Gagal menyimpan pengaturan folder Drive.');
+                    } finally {
+                      setDriveConfigBusy(false);
+                    }
                   }}
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
+                  className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold"
                 >
-                  Simpan Pengaturan
+                  Simpan Folder Drive Guru
                 </button>
               </div>
             </div>

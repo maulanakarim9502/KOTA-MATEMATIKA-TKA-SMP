@@ -11,6 +11,7 @@ import TeacherSubmissionsModal from './components/TeacherSubmissionsModal';
 import {
   buildAccountKey,
   clearActiveSessionMeta,
+  fetchGlobalTeacherDriveConfig,
   getCurrentFirebaseUser,
   loadActiveSessionProfile,
   loadBestStudentRecord,
@@ -18,6 +19,7 @@ import {
   logoutGoogle,
   mergeStudentProgress,
   saveActiveSessionMeta,
+  saveGlobalTeacherDriveConfig,
   SavedStudentRecord,
   StudentProgressMap,
   subscribeFirebaseUser,
@@ -147,6 +149,14 @@ export default function App() {
     };
 
     restoreSession();
+
+    fetchGlobalTeacherDriveConfig()
+      .then((cfg) => {
+        if (!cancelled && cfg.folderUrl) {
+          setTeacherFolderValue(cfg.folderUrl);
+        }
+      })
+      .catch(() => null);
 
     // Also auto-login automatically if browser Google session is persisted (and user didn't click Keluar)
     const unsubAuth = subscribeFirebaseUser(async (fbUser) => {
@@ -320,11 +330,7 @@ export default function App() {
   };
 
   const handleSaveTeacherFolder = () => {
-    try {
-      localStorage.setItem('tka_smp_teacher_drive_folder', teacherFolderValue.trim());
-    } catch {
-      // ignore storage quota
-    }
+    saveGlobalTeacherDriveConfig(teacherFolderValue).catch(() => null);
   };
 
   const isTeacherAccount = isLoggedIn && studentEmail.toLowerCase() === TEACHER_EMAIL.toLowerCase();
@@ -665,6 +671,10 @@ export default function App() {
           userProgress={userProgress}
           onClose={() => setActiveChapterId(null)}
           onKickOut={handleKickOut}
+          onGoToNextChapter={(nextId) => {
+            setKickedChapterId((prev) => (prev === nextId ? null : prev));
+            setActiveChapterId(nextId);
+          }}
           onUpdateProgress={handleUpdateProgress}
           speakText={speakText}
         />

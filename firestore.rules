@@ -146,6 +146,8 @@ service cloud.firestore {
           'hasAttachment',
           'folderPath',
           'serverFilePath',
+          'driveFileId',
+          'driveUrl',
           'createdAt'
         ])
         && data.keys().hasOnly([
@@ -163,6 +165,8 @@ service cloud.firestore {
           'hasAttachment',
           'folderPath',
           'serverFilePath',
+          'driveFileId',
+          'driveUrl',
           'createdAt'
         ])
         && data.id is string && data.id == submissionId
@@ -179,7 +183,34 @@ service cloud.firestore {
         && data.hasAttachment is bool
         && data.folderPath is string && data.folderPath.size() >= 1 && data.folderPath.size() <= 180
         && data.serverFilePath is string && data.serverFilePath.size() <= 260
+        && data.driveFileId is string && data.driveFileId.size() <= 128
+        && data.driveUrl is string && data.driveUrl.size() <= 300
         && data.createdAt == request.time;
+    }
+
+    function isValidTeacherDriveConfig(data, settingId) {
+      return data.keys().hasAll([
+          'id',
+          'folderId',
+          'folderUrl',
+          'folderName',
+          'teacherEmail',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'folderId',
+          'folderUrl',
+          'folderName',
+          'teacherEmail',
+          'updatedAt'
+        ])
+        && data.id is string && data.id == settingId && data.id == 'teacherDrive'
+        && data.folderId is string && data.folderId.size() <= 128
+        && data.folderUrl is string && data.folderUrl.size() <= 256
+        && data.folderName is string && data.folderName.size() <= 120
+        && data.teacherEmail is string && data.teacherEmail == 'maulanakarim9502@gmail.com'
+        && data.updatedAt == request.time;
     }
 
     match /users/{userId} {
@@ -253,6 +284,27 @@ service cloud.firestore {
       allow create: if isValidId(submissionId) && isSignedIn() && isValidStudentSubmission(incoming(), submissionId);
       allow update: if false;
       allow delete: if isValidId(submissionId) && isSignedIn() && (existing().uid == request.auth.uid || isTeacherAdmin());
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'teacherDrive' && isSignedIn();
+      allow create: if isValidId(settingId)
+        && settingId == 'teacherDrive'
+        && isTeacherAdmin()
+        && isValidTeacherDriveConfig(incoming(), settingId);
+      allow update: if isValidId(settingId)
+        && settingId == 'teacherDrive'
+        && isTeacherAdmin()
+        && isValidTeacherDriveConfig(incoming(), settingId)
+        && incoming().id == existing().id
+        && incoming().teacherEmail == existing().teacherEmail
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'folderId',
+          'folderUrl',
+          'folderName',
+          'updatedAt'
+        ]);
+      allow delete: if false;
     }
   }
 }

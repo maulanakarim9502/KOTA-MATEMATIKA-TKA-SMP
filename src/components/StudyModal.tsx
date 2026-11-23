@@ -5,8 +5,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { CHAPTERS_DATA, QUESTIONS_DATA, ChapterModule, Question } from '../data/tkaData';
+import { QUESTION_RECOMMENDED_VIDEOS } from '../data/questionVideos';
 import InteriorRoomShowcase from './InteriorRoomShowcase';
 import {
+  googleSignIn,
+  hasDriveAccessToken,
   uploadSolutionToDrive,
   UploadedDriveResult,
 } from '../services/googleDriveService';
@@ -30,6 +33,9 @@ import {
   ShieldCheck,
   Image as ImageIcon,
   Trash2,
+  ArrowRight,
+  Lock,
+  Sparkles,
 } from 'lucide-react';
 
 interface StudyModalProps {
@@ -41,6 +47,7 @@ interface StudyModalProps {
   userProgress: Record<number, { solved: boolean; stars: number; attempts: number }>;
   onClose: () => void;
   onKickOut: (kickedChapterId: number) => void;
+  onGoToNextChapter?: (nextChapterId: number) => void;
   onUpdateProgress: (qId: number, solved: boolean, stars: number, attempts: number) => void;
   speakText: (text: string) => void;
 }
@@ -54,6 +61,7 @@ export default function StudyModal({
   userProgress,
   onClose,
   onKickOut,
+  onGoToNextChapter,
   onUpdateProgress,
   speakText,
 }: StudyModalProps) {
@@ -61,7 +69,12 @@ export default function StudyModal({
   const cQuestions = QUESTIONS_DATA.filter((q) => q.chapterId === chapterId);
 
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
-  const [selectedVideoUrl, setSelectedVideoUrl] = useState<string>(chapter.videoUrls[0]?.url || '');
+  const firstQuestionId = cQuestions[0]?.id;
+  const [selectedVideoUrl, setSelectedVideoUrl] = useState<string>(
+    (firstQuestionId && QUESTION_RECOMMENDED_VIDEOS[firstQuestionId]?.[0]?.url) ||
+      chapter.videoUrls[0]?.url ||
+      ''
+  );
   const [isVideoWatched, setIsVideoWatched] = useState<boolean>(() =>
     cQuestions.some((q) => Boolean(userProgress[q.id]?.solved))
   );
@@ -75,20 +88,50 @@ export default function StudyModal({
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isKickingOut, setIsKickingOut] = useState<boolean>(false);
 
+  const uploadCacheKey = `tka_smp_uploads_v1:${(studentEmail || studentName || 'siswa').toLowerCase()}`;
+
   // Web Guru & Drive Work Upload states per question
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [workNotes, setWorkNotes] = useState<string>('');
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
-  const [uploadedByQuestion, setUploadedByQuestion] = useState<Record<number, UploadedDriveResult>>({});
+  const [driveBlockedFallback, setDriveBlockedFallback] = useState<boolean>(false);
+  const [driveReady, setDriveReady] = useState<boolean>(() => hasDriveAccessToken());
+  const [uploadedByQuestion, setUploadedByQuestion] = useState<Record<number, UploadedDriveResult>>(() => {
+    try {
+      const raw = localStorage.getItem(uploadCacheKey);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentQ: Question = cQuestions[currentQIndex] || cQuestions[0];
+  const questionVideos = QUESTION_RECOMMENDED_VIDEOS[currentQ.id] || [];
+  const activeRecommendedVideo = questionVideos.find((v) => v.url === selectedVideoUrl);
+  const selectedWatchUrl = selectedVideoUrl.includes('/embed/')
+    ? selectedVideoUrl.replace('/embed/', '/watch?v=')
+    : selectedVideoUrl;
   const solvedCountInChapter = cQuestions.filter((q) => userProgress[q.id]?.solved).length;
+  const isQuestionSolved = Boolean(userProgress[currentQ.id]?.solved) || feedback === 'correct';
 
   useEffect(() => {
-    if (!selectedFile || !selectedFile.type.startsWith('image/')) {
+    setCurrentQIndex(0);
+    const firstId = cQuestions[0]?.id;
+    const defaultUrl =
+      (firstId && QUESTION_RECOMMENDED_VIDEOS[firstId]?.[0]?.url) || chapter.videoUrls[0]?.url || '';
+    setSelectedVideoUrl(defaultUrl);
+    setIsVideoWatched(cQuestions.some((q) => Boolean(userProgress[q.id]?.solved)));
+  }, [chapterId]);
+
+  useEffect(() => {
+    const looksLikeImg =
+      selectedFile &&
+      ((selectedFile.type && selectedFile.type.startsWith('image/')) ||
+        /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(selectedFile.name || ''));
+    if (!selectedFile || !looksLikeImg) {
       setPreviewUrl('');
       return;
     }
@@ -107,11 +150,20 @@ export default function StudyModal({
   };
 
   useEffect(() => {
+    const alreadySolved = Boolean(userProgress[currentQ.id]?.solved);
+    const recUrl = QUESTION_RECOMMENDED_VIDEOS[currentQ.id]?.[0]?.url || chapter.videoUrls[0]?.url || '';
+    if (recUrl) {
+      setSelectedVideoUrl(recUrl);
+    }
     setHintLevel(0);
     setShowHint(false);
-    setShowExpl(false);
-    setFeedback('idle');
-    setFeedbackMsg('');
+    setShowExpl(alreadySolved);
+    setFeedback(alreadySolved ? 'correct' : 'idle');
+    setFeedbackMsg(
+      alreadySolved
+        ? 'Soal ini sudah kamu selesaikan! Kamu bisa melihat pembahasan dan mengirim/memperbarui foto cara pengerjaan.'
+        : ''
+    );
     setUserAnswer('');
     setSelectedFile(null);
     if (fileInputRef.current) {
@@ -119,9 +171,23 @@ export default function StudyModal({
     }
     setWorkNotes('');
     setUploadError('');
+    setDriveBlockedFallback(false);
+    setDriveReady(hasDriveAccessToken());
   }, [currentQ]);
 
-  const handleDirectUpload = async () => {
+  const persistUploadedEntry = (qId: number, res: UploadedDriveResult) => {
+    setUploadedByQuestion((prev) => {
+      const next = { ...prev, [qId]: res };
+      try {
+        localStorage.setItem(uploadCacheKey, JSON.stringify(next));
+      } catch {
+        // ignore quota
+      }
+      return next;
+    });
+  };
+
+  const executeUpload = async (useDriveAuth: boolean) => {
     setUploadError('');
     if (!selectedFile && !workNotes.trim()) {
       setUploadError('Silakan pilih foto/PDF cara pengerjaan atau tulis langkah pengerjaanmu terlebih dahulu.');
@@ -129,7 +195,14 @@ export default function StudyModal({
     }
 
     setIsUploading(true);
+    setDriveBlockedFallback(false);
     try {
+      // IMPORTANT: Authorize Google Drive FIRST directly from click gesture before any image compression awaits
+      if (useDriveAuth && !hasDriveAccessToken()) {
+        await googleSignIn();
+        setDriveReady(hasDriveAccessToken());
+      }
+
       let teacherFolderId = '';
       try {
         teacherFolderId = localStorage.getItem('tka_smp_teacher_drive_folder') || '';
@@ -149,14 +222,21 @@ export default function StudyModal({
         workNotes,
         teacherFolderInput: teacherFolderId,
       });
-      setUploadedByQuestion((prev) => ({ ...prev, [currentQ.id]: res }));
+      persistUploadedEntry(currentQ.id, res);
       clearSelectedFile();
       setWorkNotes('');
+      setDriveReady(hasDriveAccessToken());
       speakText(
-        `Mantap ${studentName}! Foto dan cara pengerjaan soal nomor ${currentQ.numberInChapter} berhasil terkirim rapi ke web guru.`
+        res.driveUrl
+          ? `Mantap ${studentName}! Foto pengerjaan soal nomor ${currentQ.numberInChapter} sudah langsung masuk ke Google Drive guru. Sekarang kamu bisa lanjut!`
+          : `Mantap ${studentName}! Hasil pengerjaan soal nomor ${currentQ.numberInChapter} tersimpan ke arsip guru.`
       );
     } catch (err: any) {
-      setUploadError(err?.message || 'Gagal mengunggah hasil pengerjaan ke web guru.');
+      const msg = err?.message || 'Gagal mengunggah hasil pengerjaan.';
+      setUploadError(msg);
+      if (useDriveAuth) {
+        setDriveBlockedFallback(true);
+      }
     } finally {
       setIsUploading(false);
     }
@@ -206,13 +286,15 @@ export default function StudyModal({
 
     if (isCorrect) {
       setFeedback('correct');
-      const msg = `Hebat sekali ${studentName}! ${currentQ.voiceScript.correct} Perabotan baru berhasil dipasang di dalam gedung!`;
+      setShowExpl(true);
+      const msg = `Hebat sekali ${studentName}! ${currentQ.voiceScript.correct} Pembahasan sekarang sudah terbuka! Unggah foto cara pengerjaanmu ke Google Drive guru untuk lanjut ke level berikutnya.`;
       setFeedbackMsg(msg);
       speakText(msg);
       onUpdateProgress(currentQ.id, true, Math.max(prev.stars, earnedStars), attempts);
     } else {
       // WRONG ANSWER: Kick student out of this building and instruct them to find another building!
       setFeedback('incorrect');
+      setShowExpl(false);
       setIsKickingOut(true);
       const kickMsg = `Jawaban belum tepat, ${studentName}! Kamu dikeluarkan dari ${chapter.title}. Ayo cari gedung bab lain di kota untuk dibangun terlebih dahulu!`;
       setFeedbackMsg(kickMsg);
@@ -269,33 +351,84 @@ export default function StudyModal({
           {/* EMPTY-TO-FURNISHED INTERIOR VISUAL SHOWCASE */}
           <InteriorRoomShowcase chapterTitle={chapter.title} solvedCount={solvedCountInChapter} />
 
-          {/* VIDEO SELECTION & PLAYER */}
+          {/* VIDEO SELECTION & PLAYER (SESUAI SOAL AKTIF + MATERI BAB) */}
           <div className="space-y-4 bg-slate-50 p-5 rounded-3xl border border-slate-200">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="font-bold text-slate-900 text-sm flex items-center">
-                <Tv className="w-4 h-4 mr-2 text-indigo-600" /> Video Pembahasan Materi TKA SMP:
-              </h4>
-              <div className="flex flex-wrap gap-2">
-                {chapter.videoUrls.map((v, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setSelectedVideoUrl(v.url)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      selectedVideoUrl === v.url
-                        ? 'bg-indigo-600 text-white shadow'
-                        : 'bg-white text-slate-700 border border-slate-200'
-                    }`}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center">
+                  <Tv className="w-4 h-4 mr-2 text-indigo-600" />
+                  <span>Video Pembahasan Khusus Soal {currentQ.numberInChapter}:</span>
+                </h4>
+                {selectedWatchUrl && (
+                  <a
+                    href={selectedWatchUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-white px-3 py-1 rounded-xl border border-indigo-200 flex items-center space-x-1"
                   >
-                    {v.title}
-                  </button>
-                ))}
+                    <span>Buka di YouTube</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
+
+              {questionVideos.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-extrabold text-emerald-800 bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-xl flex items-center space-x-1">
+                    <Sparkles className="w-3 h-3 text-emerald-700" />
+                    <span>Cocok untuk Soal {currentQ.numberInChapter}:</span>
+                  </span>
+                  {questionVideos.map((v, idx) => (
+                    <button
+                      key={`q-${currentQ.id}-${idx}`}
+                      type="button"
+                      onClick={() => setSelectedVideoUrl(v.url)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        selectedVideoUrl === v.url
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'bg-white text-emerald-900 border border-emerald-200 hover:bg-emerald-50'
+                      }`}
+                    >
+                      {v.title} ({v.channel})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-600 px-1">
+                  Video Materi Bab {chapter.id}:
+                </span>
+                {chapter.videoUrls
+                  .filter((cv) => !questionVideos.some((qv) => qv.url === cv.url))
+                  .map((v, idx) => (
+                    <button
+                      key={`ch-${chapter.id}-${idx}`}
+                      type="button"
+                      onClick={() => setSelectedVideoUrl(v.url)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        selectedVideoUrl === v.url
+                          ? 'bg-indigo-600 text-white shadow'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {v.title}
+                    </button>
+                  ))}
+              </div>
+
+              {activeRecommendedVideo && (
+                <p className="text-[11px] text-emerald-950 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl">
+                  <strong>Alasan Rekomendasi Soal {currentQ.numberInChapter}:</strong>{' '}
+                  {activeRecommendedVideo.reason}
+                </p>
+              )}
             </div>
 
             <div className="bg-slate-900 rounded-2xl overflow-hidden min-h-[240px] flex items-center justify-center">
               <iframe
                 src={selectedVideoUrl}
-                title={chapter.title}
+                title={`${chapter.title} - Soal ${currentQ.numberInChapter}`}
                 className="w-full h-full min-h-[240px] border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
@@ -450,50 +583,177 @@ export default function StudyModal({
                     })}
               </div>
 
-              {/* UPLOAD CARA PENGERJAAN PER SOAL KE WEB GURU */}
-              <div className="bg-blue-50/70 border border-blue-200 rounded-3xl p-5 space-y-4">
+              {/* ACTIONS & FEEDBACK (PEMBAHASAN ONLY UNLOCKS AFTER SOLVING) */}
+              <div className="space-y-4 pt-3 border-t border-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleShowHint}
+                      disabled={isKickingOut}
+                      className="px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs flex items-center space-x-1"
+                    >
+                      <HelpCircle className="w-4 h-4 text-amber-600" />
+                      <span>Petunjuk ({hintLevel}/3)</span>
+                    </button>
+
+                    {isQuestionSolved ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowExpl(true);
+                          speakText(`Pembahasan untuk ${studentName}: ${currentQ.explanation.join('. ')}`);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-semibold text-xs flex items-center space-x-1 shadow"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                        <span>Dengar Pembahasan</span>
+                      </button>
+                    ) : (
+                      <span className="px-3 py-2 rounded-xl bg-slate-100 text-slate-600 border border-slate-200 font-semibold text-[11px] flex items-center space-x-1.5">
+                        <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Pembahasan terbuka setelah dijawab benar</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCheck}
+                    disabled={isKickingOut}
+                    className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow transition flex items-center space-x-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Periksa Jawaban</span>
+                  </button>
+                </div>
+
+                {/* Hint Box */}
+                {showHint && (
+                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-xs text-amber-900 space-y-1">
+                    <p className="font-bold">💡 Petunjuk Level {hintLevel}:</p>
+                    <p>{currentQ.hints[hintLevel - 1]}</p>
+                  </div>
+                )}
+
+                {/* Feedback Banner */}
+                {feedback !== 'idle' && (
+                  <div
+                    className={`p-4 rounded-2xl border flex items-start space-x-3 ${
+                      feedback === 'correct'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        : 'bg-rose-50 border-rose-200 text-rose-900'
+                    }`}
+                  >
+                    {feedback === 'correct' ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <XCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    )}
+                    <div className="space-y-1 flex-1">
+                      <h5 className="font-bold text-xs">
+                        {feedback === 'correct'
+                          ? 'Benar! Perabotan Gedung Bertambah & Pembahasan Terbuka!'
+                          : 'Salah Jawaban — Keluar dari Gedung!'}
+                      </h5>
+                      <p className="text-xs leading-relaxed">{feedbackMsg}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Explanation Box — STRICTLY UNLOCKED ONLY AFTER FINISHING/SOLVING */}
+                {isQuestionSolved && showExpl && (
+                  <div className="bg-violet-50 border border-violet-200 p-4 rounded-2xl text-xs text-violet-950 space-y-1.5 shadow-sm">
+                    <p className="font-extrabold text-violet-900 flex items-center space-x-1.5">
+                      <BookOpen className="w-4 h-4 text-violet-600" />
+                      <span>Pembahasan Lengkap (Terbuka Setelah Selesai Mengerjakan):</span>
+                    </p>
+                    {currentQ.explanation.map((st, i) => (
+                      <p key={i} className="leading-relaxed">
+                        {st}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* DIRECT GOOGLE DRIVE UPLOAD TO TEACHER FOLDER & LEVEL PROGRESSION */}
+              <div className="bg-blue-50/80 border-2 border-blue-200 rounded-3xl p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center space-x-2">
                     <UploadCloud className="w-5 h-5 text-blue-600" />
                     <div>
                       <h5 className="font-bold text-slate-900 text-sm">
-                        Kirim Foto Cara Mengerjakan ke Web Guru (Soal {currentQ.numberInChapter})
+                        Kirim Foto Cara Mengerjakan ke Google Drive Guru (Soal {currentQ.numberInChapter})
                       </h5>
                       <p className="text-[11px] text-slate-700">
-                        Tercatat rapi untuk guru: <strong className="text-slate-950">{studentSchool || 'SMP'} • Kelas {studentClass || '-'} • {studentName}</strong>
+                        Ditulis langsung dengan akunmu (<strong className="text-slate-950">{studentEmail || studentName}</strong>) • {studentSchool || 'SMP'} Kelas {studentClass || '-'}
                       </p>
                     </div>
                   </div>
 
-                  {currentUploaded && (
+                  {currentUploaded ? (
                     <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center space-x-1.5 shadow">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      <span>Terkirim ke Web Guru ({currentUploaded.folderPath})</span>
+                      <span>
+                        {currentUploaded.driveUrl ? 'Terkirim ke Google Drive Guru' : 'Terkirim ke Arsip Web Guru'}
+                      </span>
                     </div>
+                  ) : (
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border ${
+                        driveReady
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                          : 'bg-amber-100 text-amber-900 border-amber-300'
+                      }`}
+                    >
+                      {driveReady ? 'Google Drive Aktif' : 'Akun Drive akan dihubungkan saat Kirim'}
+                    </span>
                   )}
                 </div>
 
                 {currentUploaded && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
-                    <div>
-                      <span className="font-bold">File tersimpan:</span> {currentUploaded.fileName}
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 space-y-2 text-xs text-emerald-950">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <span className="font-bold">Tersimpan rapi:</span> {currentUploaded.fileName}
+                        <span className="block text-[11px] text-emerald-800">{currentUploaded.folderPath}</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {currentUploaded.driveUrl && (
+                          <a
+                            href={currentUploaded.driveUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl flex items-center space-x-1"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Buka di Drive</span>
+                          </a>
+                        )}
+                        {currentUploaded.fileUrl && (
+                          <a
+                            href={currentUploaded.fileUrl}
+                            download={currentUploaded.fileName}
+                            className="bg-white border border-emerald-300 text-emerald-800 font-bold px-3 py-1.5 rounded-xl flex items-center space-x-1"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Unduh Bukti</span>
+                          </a>
+                        )}
+                      </div>
                     </div>
-                    {currentUploaded.fileUrl && (
-                      <a
-                        href={currentUploaded.fileUrl}
-                        download={currentUploaded.fileName}
-                        className="font-bold text-emerald-700 hover:underline flex items-center space-x-1"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        <span>Unduh Bukti Terkirim</span>
-                      </a>
+                    {currentUploaded.driveWarning && (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                        {currentUploaded.driveWarning}
+                      </p>
                     )}
                   </div>
                 )}
 
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-slate-800 flex items-center">
-                    <FileText className="w-3.5 h-3.5 mr-1 text-blue-600" /> Foto / Scan PDF Cara Pengerjaan (Otomatis dikompres)
+                    <FileText className="w-3.5 h-3.5 mr-1 text-blue-600" /> Pilih Foto / Scan PDF Cara Pengerjaan (Otomatis dikompres)
                   </label>
                   <input
                     ref={fileInputRef}
@@ -554,119 +814,84 @@ export default function StudyModal({
 
                 <div className="flex items-center space-x-1.5 text-[11px] text-slate-600">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Langsung terkirim otomatis ke Portal Web Guru tanpa perlu login ulang.</span>
+                  <span>
+                    File dikirim langsung ke folder Google Drive guru menggunakan akun Google kamu untuk membuka soal & level selanjutnya.
+                  </span>
                 </div>
 
                 {uploadError && (
-                  <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-3 rounded-xl font-medium">
-                    {uploadError}
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleDirectUpload}
-                  disabled={isUploading}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow transition"
-                >
-                  {isUploading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <UploadCloud className="w-4 h-4" />
-                  )}
-                  <span>
-                    {isUploading
-                      ? 'Mengompres & Mengirim ke Web Guru...'
-                      : `Kirim Foto / Cara Kerja Soal ${currentQ.numberInChapter} ke Web Guru`}
-                  </span>
-                </button>
-              </div>
-
-              {/* ACTIONS & FEEDBACK */}
-              <div className="space-y-4 pt-4 border-t border-slate-200">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={handleShowHint}
-                      disabled={isKickingOut}
-                      className="px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs flex items-center space-x-1"
-                    >
-                      <HelpCircle className="w-4 h-4 text-amber-600" />
-                      <span>Petunjuk ({hintLevel}/3)</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setShowExpl(true);
-                        speakText(`Pembahasan untuk ${studentName}: ${currentQ.explanation.join('. ')}`);
-                      }}
-                      disabled={isKickingOut}
-                      className="px-4 py-2 rounded-xl bg-violet-50 hover:bg-violet-100 text-violet-800 border border-violet-200 font-semibold text-xs flex items-center space-x-1"
-                    >
-                      <BookOpen className="w-4 h-4 text-violet-600" />
-                      <span>Pembahasan</span>
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={handleCheck}
-                    disabled={isKickingOut}
-                    className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow transition flex items-center space-x-1.5"
-                  >
-                    <Check className="w-4 h-4" />
-                    <span>Periksa Jawaban</span>
-                  </button>
-                </div>
-
-                {/* Feedback Banner */}
-                {feedback !== 'idle' && (
-                  <div
-                    className={`p-4 rounded-2xl border flex items-start space-x-3 ${
-                      feedback === 'correct'
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                        : 'bg-rose-50 border-rose-200 text-rose-900'
-                    }`}
-                  >
-                    {feedback === 'correct' ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                    )}
-                    <div className="space-y-1 flex-1">
-                      <h5 className="font-bold text-xs">
-                        {feedback === 'correct'
-                          ? 'Benar! Perabotan Gedung Bertambah!'
-                          : 'Salah Jawaban — Keluar dari Gedung!'}
-                      </h5>
-                      <p className="text-xs leading-relaxed">{feedbackMsg}</p>
-                    </div>
-                    {feedback === 'correct' && currentQIndex < cQuestions.length - 1 && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-3 rounded-xl font-medium space-y-2">
+                    <p>{uploadError}</p>
+                    {driveBlockedFallback && (
                       <button
-                        onClick={() => setCurrentQIndex(currentQIndex + 1)}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center space-x-1"
+                        type="button"
+                        onClick={() => executeUpload(false)}
+                        disabled={isUploading}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs"
                       >
-                        <span>Lanjut Soal Berikutnya</span>
+                        Kirim via Cadangan Web Guru (Tanpa Popup Google Drive)
                       </button>
                     )}
                   </div>
                 )}
 
-                {/* Hint Box */}
-                {showHint && (
-                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-xs text-amber-900 space-y-1">
-                    <p className="font-bold">💡 Petunjuk Level {hintLevel}:</p>
-                    <p>{currentQ.hints[hintLevel - 1]}</p>
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => executeUpload(true)}
+                    disabled={isUploading}
+                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow transition"
+                  >
+                    {isUploading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4" />
+                    )}
+                    <span>
+                      {isUploading
+                        ? 'Mengunggah ke Google Drive Guru...'
+                        : currentUploaded
+                          ? `Kirim Ulang Foto Soal ${currentQ.numberInChapter} ke Drive Guru`
+                          : `Kirim Foto Soal ${currentQ.numberInChapter} ke Google Drive Guru`}
+                    </span>
+                  </button>
 
-                {/* Explanation Box */}
-                {showExpl && (
-                  <div className="bg-violet-50 border border-violet-200 p-4 rounded-2xl text-xs text-violet-900 space-y-1">
-                    <p className="font-bold">📖 Pembahasan Lengkap:</p>
-                    {currentQ.explanation.map((st, i) => (
-                      <p key={i}>{st}</p>
-                    ))}
-                  </div>
+                  {isQuestionSolved && currentUploaded && (
+                    currentQIndex < cQuestions.length - 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => setCurrentQIndex(currentQIndex + 1)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow-lg transition"
+                      >
+                        <span>Lanjut ke Soal {currentQIndex + 2}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    ) : chapter.id < 11 && onGoToNextChapter ? (
+                      <button
+                        type="button"
+                        onClick={() => onGoToNextChapter(chapter.id + 1)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow-lg transition"
+                      >
+                        <span>Level Bab {chapter.id} Selesai! Lanjut ke Bab {chapter.id + 1}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={onClose}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow-lg transition"
+                      >
+                        <span>Semua Level Tuntas! Kembali ke Kota 3D</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    )
+                  )}
+                </div>
+
+                {isQuestionSolved && !currentUploaded && (
+                  <p className="text-[11px] font-bold text-indigo-800 bg-indigo-100/80 border border-indigo-200 px-3 py-2 rounded-xl">
+                    Langkah berikutnya: Kirim foto atau catatan cara pengerjaanmu ke Google Drive Guru di atas untuk membuka tombol lanjut ke {currentQIndex < cQuestions.length - 1 ? `Soal ${currentQIndex + 2}` : chapter.id < 11 ? `Bab / Level ${chapter.id + 1}` : 'Kota 3D'}.
+                  </p>
                 )}
               </div>
             </div>

@@ -370,8 +370,77 @@ async function startServer() {
     folderPath: string;
     relPath: string;
     fileUrl: string;
+    driveFileId: string;
+    driveUrl: string;
     submittedAt: number;
   }
+
+  // Global Teacher Drive Folder setting persisted on server (.data/teacher-settings.json)
+  interface TeacherDriveSettingsFile {
+    folderId: string;
+    folderUrl: string;
+    folderName: string;
+    updatedAt: number;
+  }
+
+  const teacherSettingsPath = path.join(dataDir, 'teacher-settings.json');
+  let teacherDriveSettings: TeacherDriveSettingsFile = {
+    folderId: '',
+    folderUrl: '',
+    folderName: '',
+    updatedAt: 0,
+  };
+  try {
+    if (fs.existsSync(teacherSettingsPath)) {
+      const parsed = JSON.parse(fs.readFileSync(teacherSettingsPath, 'utf-8'));
+      if (parsed && typeof parsed.folderId === 'string') {
+        teacherDriveSettings = {
+          folderId: parsed.folderId.slice(0, 128),
+          folderUrl: String(parsed.folderUrl || '').slice(0, 256),
+          folderName: String(parsed.folderName || '').slice(0, 120),
+          updatedAt: Number(parsed.updatedAt || Date.now()),
+        };
+      }
+    }
+  } catch {
+    // start empty
+  }
+
+  const flushTeacherDriveSettings = () => {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(teacherSettingsPath, JSON.stringify(teacherDriveSettings), 'utf-8');
+    } catch (err) {
+      console.error('Failed to persist teacher drive settings:', err);
+    }
+  };
+
+  app.get('/api/teacher-drive-config', (_req, res) => {
+    res.json({
+      ok: true,
+      ...teacherDriveSettings,
+    });
+  });
+
+  app.post('/api/teacher-drive-config', (req, res) => {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const teacherEmail = typeof body.teacherEmail === 'string' ? body.teacherEmail.trim().toLowerCase() : '';
+    if (teacherEmail !== 'maulanakarim9502@gmail.com') {
+      res.status(403).json({ ok: false, error: 'Hanya akun guru yang dapat mengubah folder tujuan Drive.' });
+      return;
+    }
+    const folderId = typeof body.folderId === 'string' ? body.folderId.trim().slice(0, 128) : '';
+    const folderUrl = typeof body.folderUrl === 'string' ? body.folderUrl.trim().slice(0, 256) : '';
+    const folderName = sanitizeText(body.folderName, 120, 'Arsip Tugas TKA SMP');
+    teacherDriveSettings = {
+      folderId,
+      folderUrl,
+      folderName,
+      updatedAt: Date.now(),
+    };
+    flushTeacherDriveSettings();
+    res.json({ ok: true, ...teacherDriveSettings });
+  });
 
   const subsDir = path.resolve(dataDir, 'submissions');
   const subsIndexPath = path.join(subsDir, 'index.json');
@@ -495,6 +564,9 @@ async function startServer() {
       const fileUrl = `/api/submissions/file?path=${encodeURIComponent(relPath)}`;
       const folderPath = `${cleanSchool} / Kelas ${cleanClass} / ${cleanStudent} / ${cleanChapter}`;
 
+      const driveFileId = typeof body.driveFileId === 'string' ? body.driveFileId.trim().slice(0, 128) : '';
+      const driveUrl = typeof body.driveUrl === 'string' ? body.driveUrl.trim().slice(0, 300) : '';
+
       const record: SubmissionRecord = {
         id: submissionId,
         studentName,
@@ -512,6 +584,8 @@ async function startServer() {
         folderPath,
         relPath,
         fileUrl,
+        driveFileId,
+        driveUrl,
         submittedAt: now,
       };
       submissionsList.unshift(record);
@@ -530,6 +604,8 @@ async function startServer() {
         folderPath,
         relPath,
         fileUrl,
+        driveFileId,
+        driveUrl,
       });
     } catch (err) {
       console.error('Failed to save submission on server:', err);

@@ -12,12 +12,14 @@ import {
 import { firebaseAuth as auth } from './firebaseApp';
 import {
   isVerifiedFirebaseUser,
+  loadTeacherDriveConfigFirestore,
   loadUserProgressFirestore,
   saveSubmissionMetadataFirestore,
+  saveTeacherDriveConfigFirestore,
   saveUserProgressFirestore,
 } from './firestoreService';
 
-export const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+export const SCOPES = ['https://www.googleapis.com/auth/drive'];
 export const TEACHER_EMAIL = 'maulanakarim9502@gmail.com';
 
 const basicProvider = new GoogleAuthProvider();
@@ -114,6 +116,10 @@ export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
 
+export const hasDriveAccessToken = (): boolean => {
+  return Boolean(cachedAccessToken);
+};
+
 export const getCurrentFirebaseUser = (): User | null => {
   return auth.currentUser;
 };
@@ -132,8 +138,140 @@ export function extractDriveFolderId(input: string): string | undefined {
   if (!trimmed) return undefined;
   const match = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (match && match[1]) return match[1];
+  const idParamMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParamMatch && idParamMatch[1]) return idParamMatch[1];
   if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
   return undefined;
+}
+
+export interface GlobalTeacherDriveConfig {
+  folderId: string;
+  folderUrl: string;
+  folderName: string;
+}
+
+export async function fetchGlobalTeacherDriveConfig(): Promise<GlobalTeacherDriveConfig> {
+  let localVal = '';
+  try {
+    localVal = localStorage.getItem('tka_smp_teacher_drive_folder') || '';
+  } catch {
+    localVal = '';
+  }
+
+  const [fsConfig, serverConfig] = await Promise.all([
+    isVerifiedFirebaseUser()
+      ? loadTeacherDriveConfigFirestore().catch(() => null)
+      : Promise.resolve(null),
+    fetch('/api/teacher-drive-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+
+  const folderId =
+    fsConfig?.folderId ||
+    (typeof serverConfig?.folderId === 'string' ? serverConfig.folderId : '') ||
+    extractDriveFolderId(localVal) ||
+    '';
+
+  const folderUrl =
+    fsConfig?.folderUrl ||
+    (typeof serverConfig?.folderUrl === 'string' ? serverConfig.folderUrl : '') ||
+    (folderId ? `https://drive.google.com/drive/folders/${folderId}` : '');
+
+  const folderName =
+    fsConfig?.folderName ||
+    (typeof serverConfig?.folderName === 'string' ? serverConfig.folderName : '') ||
+    'Arsip Tugas TKA SMP - Maulana Karim';
+
+  if (folderId) {
+    try {
+      localStorage.setItem('tka_smp_teacher_drive_folder', folderUrl || folderId);
+    } catch {
+      // ignore storage quota
+    }
+  }
+
+  return { folderId, folderUrl, folderName };
+}
+
+export async function saveGlobalTeacherDriveConfig(
+  folderInput: string,
+  folderName = 'Arsip Tugas TKA SMP - Maulana Karim'
+): Promise<GlobalTeacherDriveConfig> {
+  const folderId = extractDriveFolderId(folderInput) || '';
+  const folderUrl = folderId ? `https://drive.google.com/drive/folders/${folderId}` : '';
+
+  try {
+    localStorage.setItem('tka_smp_teacher_drive_folder', folderUrl || folderId);
+  } catch {
+    // ignore
+  }
+
+  const tasks: Promise<unknown>[] = [
+    fetch('/api/teacher-drive-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        teacherEmail: TEACHER_EMAIL,
+        folderId,
+        folderUrl,
+        folderName,
+      }),
+    }).catch(() => null),
+  ];
+
+  if (isVerifiedFirebaseUser()) {
+    tasks.push(
+      saveTeacherDriveConfigFirestore({
+        folderId,
+        folderUrl,
+        folderName,
+      }).catch((err) => {
+        console.warn('Firestore teacherDrive config warning:', err);
+      })
+    );
+  }
+
+  await Promise.all(tasks);
+  return { folderId, folderUrl, folderName };
+}
+
+export async function createAndShareTeacherDriveFolder(
+  folderTitle = 'Arsip Foto Tugas TKA SMP - Maulana Karim'
+): Promise<GlobalTeacherDriveConfig> {
+  let token = await getAccessToken();
+  if (!token) {
+    const authRes = await googleSignIn();
+    token = authRes?.accessToken || null;
+  }
+  if (!token) {
+    throw new Error('Login Google Drive diperlukan untuk membuat folder di Drive Anda.');
+  }
+
+  const folder = await findOrCreateFolder(token, folderTitle);
+
+  // Ensure anyone (any logged-in student) can write files inside this shared teacher folder
+  const permRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${folder.id}/permissions?sendNotificationEmail=false&supportsAllDrives=true`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: 'writer',
+        type: 'anyone',
+      }),
+    }
+  );
+  if (!permRes.ok) {
+    const errTxt = await permRes.text();
+    console.warn('Warning setting anyone writer permission:', errTxt);
+  }
+
+  const folderUrl = `https://drive.google.com/drive/folders/${folder.id}`;
+  return saveGlobalTeacherDriveConfig(folderUrl, folderTitle);
 }
 
 async function grantEditablePermissions(accessToken: string, fileId: string) {
@@ -246,6 +384,9 @@ export interface UploadedDriveResult {
   fileName: string;
   folderPath: string;
   fileUrl?: string;
+  driveFileId?: string;
+  driveUrl?: string;
+  driveWarning?: string;
   storageType?: 'drive' | 'server' | 'drive+server';
 }
 
@@ -258,11 +399,16 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function isLikelyImageFile(file: File): boolean {
+  if (file.type && file.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|webp|gif|bmp|avif|heic|heif)$/i.test(file.name || '');
+}
+
 async function compressImageForUpload(
   file: File
 ): Promise<{ blob: Blob; fileName: string; dataUrl: string }> {
   const maxBytes = 14 * 1024 * 1024;
-  if (!file.type.startsWith('image/')) {
+  if (!isLikelyImageFile(file)) {
     if (file.size > maxBytes) {
       throw new Error('Ukuran file terlalu besar (maksimal 14 MB). Pilih file yang lebih kecil.');
     }
@@ -299,8 +445,8 @@ async function compressImageForUpload(
         canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.82);
       });
 
-      if (compressedBlob && (compressedBlob.size < file.size || file.size > 400 * 1024)) {
-        const baseName = file.name.replace(/\.[^.]+$/, '') || 'foto_pengerjaan';
+      if (compressedBlob && (compressedBlob.size < file.size || file.size > 350 * 1024)) {
+        const baseName = (file.name || 'foto_pengerjaan').replace(/\.[^.]+$/, '') || 'foto_pengerjaan';
         const jpgName = `${baseName}.jpg`;
         const dataUrl = await blobToDataUrl(compressedBlob);
         return { blob: compressedBlob, fileName: jpgName, dataUrl };
@@ -309,14 +455,14 @@ async function compressImageForUpload(
       URL.revokeObjectURL(objectUrl);
     }
   } catch {
-    // Fallback to raw image if canvas compression is unsupported (e.g. HEIC)
+    // Fallback to raw image if canvas compression is unsupported (e.g. HEIC on desktop)
   }
 
   if (file.size > maxBytes) {
     throw new Error('Ukuran foto terlalu besar (maksimal 14 MB). Coba perkecil resolusi foto.');
   }
   const dataUrl = await blobToDataUrl(file);
-  return { blob: file, fileName: file.name, dataUrl };
+  return { blob: file, fileName: file.name || 'foto_pengerjaan.jpg', dataUrl };
 }
 
 export async function uploadSolutionToDrive(
@@ -330,19 +476,52 @@ export async function uploadSolutionToDrive(
   const preparedFile = params.file ? await compressImageForUpload(params.file) : null;
 
   let driveUploaded: UploadedDriveResult | null = null;
+  let driveWarning = '';
   const accessToken = await getAccessToken();
+
   if (accessToken) {
     try {
       const envFolderId = (import.meta as any).env?.VITE_TEACHER_DRIVE_FOLDER_ID || '';
-      const configuredFolderId = extractDriveFolderId(params.teacherFolderInput || envFolderId);
+      const globalConfig = await fetchGlobalTeacherDriveConfig().catch(() => ({
+        folderId: '',
+        folderUrl: '',
+        folderName: '',
+      }));
+      const configuredFolderId =
+        extractDriveFolderId(params.teacherFolderInput || '') ||
+        globalConfig.folderId ||
+        extractDriveFolderId(envFolderId);
 
-      const rootFolder = configuredFolderId
-        ? { id: configuredFolderId, name: 'Folder Guru' }
-        : await findOrCreateFolder(accessToken, 'Arsip TKA SMP - Maulana Karim');
+      let rootFolder: { id: string; name: string };
+      let schoolFolder: { id: string; name: string };
+      let classFolder: { id: string; name: string };
+      let studentFolder: { id: string; name: string };
+      let chapterFolder: { id: string; name: string };
 
-      const schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
-      const classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
-      const chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, classFolder.id);
+      if (configuredFolderId) {
+        try {
+          rootFolder = { id: configuredFolderId, name: globalConfig.folderName || 'Folder Drive Guru' };
+          schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
+          classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
+          studentFolder = await findOrCreateFolder(accessToken, cleanName, classFolder.id);
+          chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, studentFolder.id);
+        } catch (sharedErr: any) {
+          driveWarning =
+            'Folder Drive Guru belum dibuka izin Editor ("Siapa saja yang memiliki link -> Editor"), file disimpan ke Drive akun siswa & dibagikan ke guru.';
+          console.warn('Shared teacher folder write failed, falling back to student Drive shared with teacher:', sharedErr);
+          rootFolder = await findOrCreateFolder(accessToken, 'Arsip TKA SMP - Maulana Karim');
+          schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
+          classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
+          studentFolder = await findOrCreateFolder(accessToken, cleanName, classFolder.id);
+          chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, studentFolder.id);
+        }
+      } else {
+        rootFolder = await findOrCreateFolder(accessToken, 'Arsip TKA SMP - Maulana Karim');
+        schoolFolder = await findOrCreateFolder(accessToken, cleanSchool, rootFolder.id);
+        classFolder = await findOrCreateFolder(accessToken, `Kelas ${cleanClass}`, schoolFolder.id);
+        studentFolder = await findOrCreateFolder(accessToken, cleanName, classFolder.id);
+        chapterFolder = await findOrCreateFolder(accessToken, cleanChapter, studentFolder.id);
+      }
 
       const timestamp = new Date().toISOString().slice(0, 16).replace(':', '-');
       const baseTitle = `${cleanName} (${cleanClass} - ${cleanSchool}) - Soal ${params.questionNumber} (${timestamp})`;
@@ -389,7 +568,7 @@ export async function uploadSolutionToDrive(
       form.append('file', fileBlob);
 
       const uploadRes = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink&supportsAllDrives=true',
         {
           method: 'POST',
           headers: {
@@ -402,19 +581,29 @@ export async function uploadSolutionToDrive(
       if (uploadRes.ok) {
         const uploaded = await uploadRes.json();
         await grantEditablePermissions(accessToken, uploaded.id);
+        const viewLink =
+          uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`;
         driveUploaded = {
           fileId: uploaded.id,
           fileName: uploaded.name,
-          folderPath: `${cleanSchool} / Kelas ${cleanClass} / ${cleanChapter}`,
+          folderPath: `${cleanSchool} / Kelas ${cleanClass} / ${cleanName} / ${cleanChapter}`,
+          driveFileId: uploaded.id,
+          driveUrl: viewLink,
+          driveWarning: driveWarning || undefined,
           storageType: 'drive',
         };
+      } else {
+        const errBody = await uploadRes.text();
+        driveWarning = `Google Drive mengembalikan error (${uploadRes.status}): ${errBody.slice(0, 120)}`;
+        console.warn('Google Drive upload failed:', uploadRes.status, errBody);
       }
-    } catch (err) {
+    } catch (err: any) {
+      driveWarning = err?.message || 'Gagal menulis langsung ke Google Drive.';
       console.warn('Google Drive API upload warning, continuing with Web Guru server:', err);
     }
   }
 
-  // Primary Web Guru server submission (always stores photo + notes for Teacher Portal)
+  // Primary/Mirror Web Guru server submission (stores photo + notes + Drive link for Teacher Portal)
   let serverResult: {
     id: string;
     fileId: string;
@@ -440,6 +629,8 @@ export async function uploadSolutionToDrive(
         workNotes: params.workNotes,
         fileName: preparedFile?.fileName,
         fileData: preparedFile?.dataUrl,
+        driveFileId: driveUploaded?.driveFileId || '',
+        driveUrl: driveUploaded?.driveUrl || '',
       }),
     });
 
@@ -456,7 +647,7 @@ export async function uploadSolutionToDrive(
         parsed?.error ||
         (serverRes.status === 413
           ? 'Ukuran foto terlalu besar. Silakan gunakan foto dengan ukuran lebih kecil.'
-          : `Gagal mengirim file ke web guru (HTTP ${serverRes.status}).`);
+          : `Gagal mengirim file ke server web guru (HTTP ${serverRes.status}).`);
     } else {
       serverResult = {
         id: parsed.id || parsed.fileId || `sub_${Date.now()}`,
@@ -473,15 +664,15 @@ export async function uploadSolutionToDrive(
   }
 
   if (!serverResult && !driveUploaded) {
-    throw new Error(serverErrMessage || 'Gagal mengirim hasil pengerjaan ke web guru.');
+    throw new Error(driveWarning || serverErrMessage || 'Gagal mengirim hasil pengerjaan.');
   }
 
   const finalId = serverResult?.id || driveUploaded?.fileId || `sub_${Date.now()}`;
   const finalFileName =
-    serverResult?.fileName || driveUploaded?.fileName || `soal_${params.questionNumber}.txt`;
+    driveUploaded?.fileName || serverResult?.fileName || `soal_${params.questionNumber}.txt`;
   const finalFolderPath =
-    serverResult?.folderPath ||
     driveUploaded?.folderPath ||
+    serverResult?.folderPath ||
     `${cleanSchool} / Kelas ${cleanClass} / ${cleanName}`;
 
   // Best-effort Firestore metadata record (strictly metadata, no image binary)
@@ -500,6 +691,8 @@ export async function uploadSolutionToDrive(
       hasAttachment: Boolean(preparedFile),
       folderPath: finalFolderPath,
       serverFilePath: serverResult?.relPath || '',
+      driveFileId: driveUploaded?.driveFileId || '',
+      driveUrl: driveUploaded?.driveUrl || '',
     }).catch((err) => {
       console.warn('Firestore submission metadata deferred:', err);
     });
@@ -510,6 +703,9 @@ export async function uploadSolutionToDrive(
     fileName: finalFileName,
     folderPath: finalFolderPath,
     fileUrl: serverResult?.fileUrl,
+    driveFileId: driveUploaded?.driveFileId,
+    driveUrl: driveUploaded?.driveUrl,
+    driveWarning: driveWarning || undefined,
     storageType: driveUploaded && serverResult ? 'drive+server' : driveUploaded ? 'drive' : 'server',
   };
 }

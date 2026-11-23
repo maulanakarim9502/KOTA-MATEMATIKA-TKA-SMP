@@ -93,6 +93,8 @@
         "hasAttachment": { "type": "boolean" },
         "folderPath": { "type": "string", "minLength": 1, "maxLength": 180 },
         "serverFilePath": { "type": "string", "maxLength": 260 },
+        "driveFileId": { "type": "string", "maxLength": 128 },
+        "driveUrl": { "type": "string", "maxLength: 300 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -110,7 +112,30 @@
         "hasAttachment",
         "folderPath",
         "serverFilePath",
+        "driveFileId",
+        "driveUrl",
         "createdAt"
+      ]
+    },
+    "TeacherDriveConfig": {
+      "title": "TeacherDriveConfig",
+      "description": "Shared Google Drive destination folder configuration managed by the teacher admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "folderUrl": { "type": "string", "maxLength": 256 },
+        "folderName": { "type": "string", "maxLength": 120 },
+        "teacherEmail": { "type": "string", "maxLength: 100 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "folderId",
+        "folderUrl",
+        "folderName",
+        "teacherEmail",
+        "updatedAt"
       ]
     }
   },
@@ -126,6 +151,10 @@
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/StudentSubmission" },
       "description": "Student solution submission logs visible to the student owner and teacher admin."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/TeacherDriveConfig" },
+      "description": "Shared teacher Google Drive folder settings readable by authenticated users and writable only by teacher admin."
     }
   }
 }

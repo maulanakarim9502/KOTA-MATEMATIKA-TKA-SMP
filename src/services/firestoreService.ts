@@ -403,6 +403,8 @@ export interface FirestoreSubmissionRecord {
   hasAttachment: boolean;
   folderPath: string;
   serverFilePath: string;
+  driveFileId: string;
+  driveUrl: string;
   createdAt: number;
 }
 
@@ -420,6 +422,8 @@ export async function saveSubmissionMetadataFirestore(params: {
   hasAttachment: boolean;
   folderPath: string;
   serverFilePath: string;
+  driveFileId?: string;
+  driveUrl?: string;
 }): Promise<void> {
   const user = firebaseAuth.currentUser;
   if (!user || !user.emailVerified) return;
@@ -444,6 +448,8 @@ export async function saveSubmissionMetadataFirestore(params: {
       hasAttachment: Boolean(params.hasAttachment),
       folderPath: sanitizeString(params.folderPath, 180, 'Arsip Guru'),
       serverFilePath: (params.serverFilePath || '').slice(0, 260),
+      driveFileId: (params.driveFileId || '').slice(0, 128),
+      driveUrl: (params.driveUrl || '').slice(0, 300),
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -479,6 +485,8 @@ export async function listStudentSubmissionsFirestore(): Promise<FirestoreSubmis
         hasAttachment: Boolean(d.hasAttachment),
         folderPath: String(d.folderPath || ''),
         serverFilePath: String(d.serverFilePath || ''),
+        driveFileId: String(d.driveFileId || ''),
+        driveUrl: String(d.driveUrl || ''),
         createdAt: d.createdAt instanceof Timestamp ? d.createdAt.toMillis() : Date.now(),
       });
     });
@@ -488,4 +496,58 @@ export async function listStudentSubmissionsFirestore(): Promise<FirestoreSubmis
     handleFirestoreError(error, OperationType.LIST, path);
   }
 }
+
+export interface TeacherDriveConfigRecord {
+  id: string;
+  folderId: string;
+  folderUrl: string;
+  folderName: string;
+  teacherEmail: string;
+  updatedAt: number;
+}
+
+export async function loadTeacherDriveConfigFirestore(): Promise<TeacherDriveConfigRecord | null> {
+  if (!isVerifiedFirebaseUser()) return null;
+  const path = 'settings/teacherDrive';
+  try {
+    const snap = await getDoc(doc(db, 'settings', 'teacherDrive'));
+    if (!snap.exists()) return null;
+    const d = snap.data();
+    return {
+      id: String(d.id || 'teacherDrive'),
+      folderId: String(d.folderId || ''),
+      folderUrl: String(d.folderUrl || ''),
+      folderName: String(d.folderName || ''),
+      teacherEmail: String(d.teacherEmail || ''),
+      updatedAt: d.updatedAt instanceof Timestamp ? d.updatedAt.toMillis() : Date.now(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function saveTeacherDriveConfigFirestore(params: {
+  folderId: string;
+  folderUrl: string;
+  folderName: string;
+}): Promise<void> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified || user.email?.toLowerCase() !== 'maulanakarim9502@gmail.com') {
+    throw new Error('Hanya akun guru (maulanakarim9502@gmail.com) yang dapat menyimpan folder Drive tujuan.');
+  }
+  const path = 'settings/teacherDrive';
+  try {
+    await setDoc(doc(db, 'settings', 'teacherDrive'), {
+      id: 'teacherDrive',
+      folderId: (params.folderId || '').trim().slice(0, 128),
+      folderUrl: (params.folderUrl || '').trim().slice(0, 256),
+      folderName: sanitizeString(params.folderName, 120, 'Arsip Tugas TKA SMP'),
+      teacherEmail: 'maulanakarim9502@gmail.com',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
 

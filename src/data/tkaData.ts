@@ -36,8 +36,10 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Perbandingan, Skala, Faktorisasi Prima, & Notasi Ilmiah',
     description: 'Pusat perhitungan skala peta, perbandingan senilai/berbalik nilai, dan notasi ilmiah.',
     videoUrls: [
-      { title: 'Edu-Vid Part-1 (Bilangan & Perbandingan)', url: 'https://www.youtube.com/embed/OSzY633N5TA' },
-      { title: 'Edu-Vid Part-2 (Perbandingan Berbalik Nilai)', url: 'https://www.youtube.com/embed/GFnhttH--yk' }
+      { title: 'Skala Peta & Jarak (Yufid EDU)', url: 'https://www.youtube.com/embed/92ecgOQIj38' },
+      { title: 'Perbandingan Senilai & Berbalik Nilai', url: 'https://www.youtube.com/embed/cYlnBH1IRGg' },
+      { title: 'Notasi Ilmiah & Bentuk Baku', url: 'https://www.youtube.com/embed/rbvPt7h74Jw' },
+      { title: 'Faktorisasi Prima Pohon Faktor', url: 'https://www.youtube.com/embed/5gO1fO9U3po' }
     ],
     badgeName: 'Ahli Bilangan Real',
     color: '#4f46e5',
@@ -49,8 +51,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'PLSV, PtLSV, & SPLDV',
     description: 'Pusat analisis persamaan dan sistem pertidaksamaan linear dua variabel.',
     videoUrls: [
-      { title: 'Edu-Vid Part-3 (PtLSV & SPLDV)', url: 'https://www.youtube.com/embed/ukyG40w5J5E' },
-      { title: 'Mantappu Academy (PtLSV Garis Bilangan)', url: 'https://www.youtube.com/embed/6PACMPC_i5M' }
+      { title: 'PLSV & Pindah Ruas (Kimatika)', url: 'https://www.youtube.com/embed/OyynhZDrU-0' },
+      { title: 'PtLSV & Pertidaksamaan (Kimatika)', url: 'https://www.youtube.com/embed/SM7qejnJv28' },
+      { title: 'Soal Cerita SPLDV Lengkap', url: 'https://www.youtube.com/embed/lAc-Fmc9o4Q' }
     ],
     badgeName: 'Pakar Aljabar Linier',
     color: '#06b6d4',
@@ -62,8 +65,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Operasi Hitung, Pemfaktoran, & Pemodelan Aljabar',
     description: 'Pusat manipulasi suku aljabar, penjabaran, dan pemfaktoran suku.',
     videoUrls: [
-      { title: 'Edu-Vid Part-3 (Penyederhanaan Aljabar)', url: 'https://www.youtube.com/embed/ukyG40w5J5E' },
-      { title: 'Edu-Vid Part-1 (Pemodelan Alat Tulis)', url: 'https://www.youtube.com/embed/OSzY633N5TA' }
+      { title: 'Perkalian & Operasi Aljabar', url: 'https://www.youtube.com/embed/JW9wZE8WPes' },
+      { title: 'Soal Cerita Bentuk Aljabar', url: 'https://www.youtube.com/embed/ZoNeF7GG4Tw' },
+      { title: 'Pemfaktoran Selisih Kuadrat (Le GuruLes)', url: 'https://www.youtube.com/embed/zwvPz5EccCc' }
     ],
     badgeName: 'Master Suku Aljabar',
     color: '#10b981',
@@ -75,8 +79,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Koordinat Kartesius & Fungsi Linear',
     description: 'Pusat pemetaan koordinat, relasi, dan rumus fungsi f(x).',
     videoUrls: [
-      { title: 'Edu-Vid Part-3 (Rumus Fungsi Linear)', url: 'https://www.youtube.com/embed/ukyG40w5J5E' },
-      { title: 'Mantappu Academy (Menentukan f(x))', url: 'https://www.youtube.com/embed/6PACMPC_i5M' }
+      { title: 'Fungsi Linear & Titik Potong', url: 'https://www.youtube.com/embed/9lwf-Z49_g8' },
+      { title: 'Menentukan Rumus f(x) = ax + b', url: 'https://www.youtube.com/embed/uHgVLcseLxM' },
+      { title: 'Koordinat Kartesius & Kuadran', url: 'https://www.youtube.com/embed/FnwG8PnqATA' }
     ],
     badgeName: 'Ahli Koordinat & Fungsi',
     color: '#f59e0b',
@@ -88,8 +93,10 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Pola Bilangan, Aritmetika, & Geometri',
     description: 'Pusat analisis pola susunan objek dan barisan bilangan.',
     videoUrls: [
-      { title: 'Edu-Vid Part-3 (Pola Titik & Aritmetika)', url: 'https://www.youtube.com/embed/ukyG40w5J5E' },
-      { title: 'Mantappu Academy (Pola Persegi)', url: 'https://www.youtube.com/embed/6PACMPC_i5M' }
+      { title: 'Barisan & Deret Aritmetika (Un)', url: 'https://www.youtube.com/embed/pTeZjwTA3Rs' },
+      { title: 'Pola Bilangan Segitiga', url: 'https://www.youtube.com/embed/JH_eArQYBVE' },
+      { title: 'Jumlah Deret Aritmetika (Sn)', url: 'https://www.youtube.com/embed/3wgAx11Rwtc' },
+      { title: 'Barisan & Deret Geometri', url: 'https://www.youtube.com/embed/eGjxsBQfFIM' }
     ],
     badgeName: 'Detektif Pola Bilangan',
     color: '#ec4899',
@@ -101,8 +108,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Hubungan Antar Sudut & Jaring-jaring Bangun Ruang',
     description: 'Pusat analisis garis sejajar, sudut berpelurus, dan jaring-jaring prisma/limas.',
     videoUrls: [
-      { title: 'Edu-Vid Part-4 (Sudut Garis Sejajar)', url: 'https://www.youtube.com/embed/juDOq8MGCAU' },
-      { title: 'Edu-Vid Part-5 (Jaring-jaring Prisma)', url: 'https://www.youtube.com/embed/w0I5n9Hc_t4' }
+      { title: 'Sudut Garis Sejajar (Yufid EDU)', url: 'https://www.youtube.com/embed/0slFc-H5vxQ' },
+      { title: 'Sudut Berpenyiku & Berpelurus (Le GuruLes)', url: 'https://www.youtube.com/embed/-DxyQFfKwXY' },
+      { title: 'Jaring-Jaring & Unsur Prisma 3D', url: 'https://www.youtube.com/embed/_m-fUX8NFio' }
     ],
     badgeName: 'Arsitek Sudut & Ruang',
     color: '#8b5cf6',
@@ -114,8 +122,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Teorema Pythagoras, Kongruen, & Sebangun',
     description: 'Pusat perhitungan sisi segitiga siku-siku dan perbandingan kesebangunan.',
     videoUrls: [
-      { title: 'Edu-Vid Part-4 (Kesebangunan Segitiga)', url: 'https://www.youtube.com/embed/juDOq8MGCAU' },
-      { title: 'Edu-Vid Part-5 (Tripel Pythagoras)', url: 'https://www.youtube.com/embed/w0I5n9Hc_t4' }
+      { title: 'Teorema & Tripel Pythagoras', url: 'https://www.youtube.com/embed/rGx96J6oraI' },
+      { title: 'Kesebangunan Tinggi Pohon & Bayangan', url: 'https://www.youtube.com/embed/LnArvqewnAE' },
+      { title: 'Kesebangunan Foto & Karton', url: 'https://www.youtube.com/embed/G8qgMC3yFGE' }
     ],
     badgeName: 'Master Pythagoras',
     color: '#3b82f6',
@@ -127,7 +136,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Refleksi, Translasi, Rotasi, & Dilatasi',
     description: 'Pusat pergerakan koordinat bangun datar pada bidang.',
     videoUrls: [
-      { title: 'Edu-Vid Part-5 (Translasi & Rotasi)', url: 'https://www.youtube.com/embed/w0I5n9Hc_t4' }
+      { title: 'Translasi (Pergeseran) Kelas 9', url: 'https://www.youtube.com/embed/Q1BbgHK4axg' },
+      { title: 'Refleksi Sumbu X & Garis y = x', url: 'https://www.youtube.com/embed/mTYDVthj90Y' },
+      { title: 'Rotasi 180° & Dilatasi Skala k', url: 'https://www.youtube.com/embed/8XTOxmO-mzk' }
     ],
     badgeName: 'Navigator Transformasi',
     color: '#14b8a6',
@@ -139,9 +150,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Keliling, Luas Gabungan, & Volume Bangun Ruang',
     description: 'Pusat perhitungan luas bangun datar majemuk dan volume ruang.',
     videoUrls: [
-      { title: 'Edu-Vid Part-4 (Luas Gabungan Taman)', url: 'https://www.youtube.com/embed/juDOq8MGCAU' },
-      { title: 'Edu-Vid Part-5 (Volume Ruang)', url: 'https://www.youtube.com/embed/w0I5n9Hc_t4' },
-      { title: 'Edu-Vid Part-6 (Monumen Ruang)', url: 'https://www.youtube.com/embed/OW3710R9pQk' }
+      { title: 'Luas Gabungan Persegi Panjang & Lingkaran', url: 'https://www.youtube.com/embed/vwZGVVBk5Q0' },
+      { title: 'Keliling Lingkaran Diketahui Diameter', url: 'https://www.youtube.com/embed/ObP2FsxSk1I' },
+      { title: 'Volume Kubus & Balok Kelas 8', url: 'https://www.youtube.com/embed/LHsYcVnCZBU' }
     ],
     badgeName: 'Ahli Pengukuran Ruang',
     color: '#f97316',
@@ -153,7 +164,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Mean, Median, Modus, & Membaca Diagram',
     description: 'Pusat pengolahan data pemusatan dan interpretasi diagram.',
     videoUrls: [
-      { title: 'Edu-Vid Part-6 (Statistika & Rata-rata Gabungan)', url: 'https://www.youtube.com/embed/OW3710R9pQk' }
+      { title: 'Mean, Median & Modus Data Tunggal', url: 'https://www.youtube.com/embed/5ReiyMLq_E0' },
+      { title: 'Rata-Rata Gabungan Siswa Baru', url: 'https://www.youtube.com/embed/4YJSsT97Jt8' },
+      { title: 'Menghitung Diagram Lingkaran Persen', url: 'https://www.youtube.com/embed/xDZXgfIy-5o' }
     ],
     badgeName: 'Analis Data Utama',
     color: '#84cc16',
@@ -165,7 +178,9 @@ export const CHAPTERS_DATA: ChapterModule[] = [
     subtitle: 'Peluang Teoretik, Frekuensi Relatif, & Harapan',
     description: 'Pusat perhitungan peluang kejadian dan frekuensi harapan.',
     videoUrls: [
-      { title: 'Edu-Vid Part-6 (Peluang & Frekuensi Harapan)', url: 'https://www.youtube.com/embed/OW3710R9pQk' }
+      { title: 'Peluang Teoretik & Pelemparan Dadu', url: 'https://www.youtube.com/embed/Dc6Ti7jf0R8' },
+      { title: 'Frekuensi Harapan & Frekuensi Relatif', url: 'https://www.youtube.com/embed/WG1EVajx7KU' },
+      { title: 'Peluang Komplemen Kejadian (Yufid EDU)', url: 'https://www.youtube.com/embed/v3fR67mdlAA' }
     ],
     badgeName: 'Pakar Probabilitas',
     color: '#a855f7',
