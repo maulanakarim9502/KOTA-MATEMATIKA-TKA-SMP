@@ -130,6 +130,58 @@ service cloud.firestore {
         && data.updatedAt == request.time;
     }
 
+    function isValidStudentSubmission(data, submissionId) {
+      return data.keys().hasAll([
+          'id',
+          'uid',
+          'studentName',
+          'school',
+          'studentClass',
+          'email',
+          'chapterId',
+          'chapterTitle',
+          'questionNumber',
+          'workNotes',
+          'fileName',
+          'hasAttachment',
+          'folderPath',
+          'serverFilePath',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'uid',
+          'studentName',
+          'school',
+          'studentClass',
+          'email',
+          'chapterId',
+          'chapterTitle',
+          'questionNumber',
+          'workNotes',
+          'fileName',
+          'hasAttachment',
+          'folderPath',
+          'serverFilePath',
+          'createdAt'
+        ])
+        && data.id is string && data.id == submissionId
+        && data.uid is string && data.uid == request.auth.uid
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 40
+        && data.school is string && data.school.size() <= 60
+        && data.studentClass is string && data.studentClass.size() <= 20
+        && data.email is string && data.email.size() <= 100
+        && data.chapterId is int && data.chapterId >= 1 && data.chapterId <= 11
+        && data.chapterTitle is string && data.chapterTitle.size() >= 1 && data.chapterTitle.size() <= 80
+        && data.questionNumber is int && data.questionNumber >= 1 && data.questionNumber <= 5
+        && data.workNotes is string && data.workNotes.size() <= 2000
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 140
+        && data.hasAttachment is bool
+        && data.folderPath is string && data.folderPath.size() >= 1 && data.folderPath.size() <= 180
+        && data.serverFilePath is string && data.serverFilePath.size() <= 260
+        && data.createdAt == request.time;
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || isTeacherAdmin());
       allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isTeacherAdmin());
@@ -193,6 +245,14 @@ service cloud.firestore {
           ])
         );
       allow delete: if isValidId(playerId) && isSignedIn() && isOwner(playerId);
+    }
+
+    match /submissions/{submissionId} {
+      allow get: if isValidId(submissionId) && isSignedIn() && (existing().uid == request.auth.uid || isTeacherAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isTeacherAdmin());
+      allow create: if isValidId(submissionId) && isSignedIn() && isValidStudentSubmission(incoming(), submissionId);
+      allow update: if false;
+      allow delete: if isValidId(submissionId) && isSignedIn() && (existing().uid == request.auth.uid || isTeacherAdmin());
     }
   }
 }

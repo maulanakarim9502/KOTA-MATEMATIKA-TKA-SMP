@@ -13,6 +13,7 @@ import { firebaseAuth as auth } from './firebaseApp';
 import {
   isVerifiedFirebaseUser,
   loadUserProgressFirestore,
+  saveSubmissionMetadataFirestore,
   saveUserProgressFirestore,
 } from './firestoreService';
 
@@ -244,21 +245,96 @@ export interface UploadedDriveResult {
   fileId: string;
   fileName: string;
   folderPath: string;
+  fileUrl?: string;
+  storageType?: 'drive' | 'server' | 'drive+server';
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Gagal membaca file yang dipilih.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function compressImageForUpload(
+  file: File
+): Promise<{ blob: Blob; fileName: string; dataUrl: string }> {
+  const maxBytes = 14 * 1024 * 1024;
+  if (!file.type.startsWith('image/')) {
+    if (file.size > maxBytes) {
+      throw new Error('Ukuran file terlalu besar (maksimal 14 MB). Pilih file yang lebih kecil.');
+    }
+    const dataUrl = await blobToDataUrl(file);
+    return { blob: file, fileName: file.name, dataUrl };
+  }
+
+  try {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('Format gambar tidak dapat diproses canvas.'));
+        image.src = objectUrl;
+      });
+
+      const maxDim = 1400;
+      const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+      const targetW = Math.max(1, Math.round(img.width * scale));
+      const targetH = Math.max(1, Math.round(img.height * scale));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D tidak tersedia.');
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, targetW, targetH);
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+
+      const compressedBlob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.82);
+      });
+
+      if (compressedBlob && (compressedBlob.size < file.size || file.size > 400 * 1024)) {
+        const baseName = file.name.replace(/\.[^.]+$/, '') || 'foto_pengerjaan';
+        const jpgName = `${baseName}.jpg`;
+        const dataUrl = await blobToDataUrl(compressedBlob);
+        return { blob: compressedBlob, fileName: jpgName, dataUrl };
+      }
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch {
+    // Fallback to raw image if canvas compression is unsupported (e.g. HEIC)
+  }
+
+  if (file.size > maxBytes) {
+    throw new Error('Ukuran foto terlalu besar (maksimal 14 MB). Coba perkecil resolusi foto.');
+  }
+  const dataUrl = await blobToDataUrl(file);
+  return { blob: file, fileName: file.name, dataUrl };
 }
 
 export async function uploadSolutionToDrive(
   params: UploadSolutionParams
 ): Promise<UploadedDriveResult> {
+  const cleanSchool = params.studentSchool.trim() || 'Sekolah Umum';
+  const cleanClass = params.studentClass.trim() || 'Kelas 9';
+  const cleanName = params.studentName.trim() || 'Siswa';
+  const cleanChapter = params.chapterTitle.replace(/:/g, ' -').trim();
+
+  const preparedFile = params.file ? await compressImageForUpload(params.file) : null;
+
+  let driveUploaded: UploadedDriveResult | null = null;
   const accessToken = await getAccessToken();
   if (accessToken) {
     try {
       const envFolderId = (import.meta as any).env?.VITE_TEACHER_DRIVE_FOLDER_ID || '';
       const configuredFolderId = extractDriveFolderId(params.teacherFolderInput || envFolderId);
-
-      const cleanSchool = params.studentSchool.trim() || 'Sekolah Umum';
-      const cleanClass = params.studentClass.trim() || 'Kelas 9';
-      const cleanName = params.studentName.trim() || 'Siswa';
-      const cleanChapter = params.chapterTitle.replace(/:/g, ' -').trim();
 
       const rootFolder = configuredFolderId
         ? { id: configuredFolderId, name: 'Folder Guru' }
@@ -274,9 +350,11 @@ export async function uploadSolutionToDrive(
       let fileBlob: Blob;
       let uploadFileName: string;
 
-      if (params.file) {
-        fileBlob = params.file;
-        const ext = params.file.name.includes('.') ? params.file.name.split('.').pop() : 'dat';
+      if (preparedFile) {
+        fileBlob = preparedFile.blob;
+        const ext = preparedFile.fileName.includes('.')
+          ? preparedFile.fileName.split('.').pop()
+          : 'jpg';
         uploadFileName = `${baseTitle}.${ext}`;
       } else {
         const textContent = [
@@ -324,57 +402,115 @@ export async function uploadSolutionToDrive(
       if (uploadRes.ok) {
         const uploaded = await uploadRes.json();
         await grantEditablePermissions(accessToken, uploaded.id);
-        return {
+        driveUploaded = {
           fileId: uploaded.id,
           fileName: uploaded.name,
           folderPath: `${cleanSchool} / Kelas ${cleanClass} / ${cleanChapter}`,
+          storageType: 'drive',
         };
       }
     } catch (err) {
-      console.warn('Google Drive API upload exception, falling back to server arsip:', err);
+      console.warn('Google Drive API upload warning, continuing with Web Guru server:', err);
     }
   }
 
-  // Fallback: Direct server arsip submission (Guaranteed to succeed without Google OAuth verification blocks)
-  let fileDataB64: string | undefined;
-  if (params.file) {
-    fileDataB64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = reject;
-      reader.readAsDataURL(params.file!);
+  // Primary Web Guru server submission (always stores photo + notes for Teacher Portal)
+  let serverResult: {
+    id: string;
+    fileId: string;
+    fileName: string;
+    folderPath: string;
+    relPath: string;
+    fileUrl: string;
+  } | null = null;
+  let serverErrMessage = '';
+
+  try {
+    const serverRes = await fetch('/api/upload-solution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentName: cleanName,
+        school: cleanSchool,
+        studentClass: cleanClass,
+        email: params.studentEmail,
+        chapterId: params.chapterId,
+        chapterTitle: params.chapterTitle,
+        questionNumber: params.questionNumber,
+        workNotes: params.workNotes,
+        fileName: preparedFile?.fileName,
+        fileData: preparedFile?.dataUrl,
+      }),
     });
+
+    const rawText = await serverRes.text();
+    let parsed: any = null;
+    try {
+      parsed = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      parsed = null;
+    }
+
+    if (!serverRes.ok || !parsed?.ok) {
+      serverErrMessage =
+        parsed?.error ||
+        (serverRes.status === 413
+          ? 'Ukuran foto terlalu besar. Silakan gunakan foto dengan ukuran lebih kecil.'
+          : `Gagal mengirim file ke web guru (HTTP ${serverRes.status}).`);
+    } else {
+      serverResult = {
+        id: parsed.id || parsed.fileId || `sub_${Date.now()}`,
+        fileId: parsed.fileId || parsed.id || `sub_${Date.now()}`,
+        fileName: parsed.fileName || preparedFile?.fileName || `soal_${params.questionNumber}.txt`,
+        folderPath: parsed.folderPath || `${cleanSchool} / Kelas ${cleanClass} / ${cleanName}`,
+        relPath: parsed.relPath || '',
+        fileUrl: parsed.fileUrl || '',
+      };
+    }
+  } catch (networkErr: any) {
+    serverErrMessage =
+      networkErr?.message || 'Koneksi ke server web guru terputus. Coba beberapa saat lagi.';
   }
 
-  const serverRes = await fetch('/api/upload-solution', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      studentName: params.studentName,
-      school: params.studentSchool,
-      studentClass: params.studentClass,
+  if (!serverResult && !driveUploaded) {
+    throw new Error(serverErrMessage || 'Gagal mengirim hasil pengerjaan ke web guru.');
+  }
+
+  const finalId = serverResult?.id || driveUploaded?.fileId || `sub_${Date.now()}`;
+  const finalFileName =
+    serverResult?.fileName || driveUploaded?.fileName || `soal_${params.questionNumber}.txt`;
+  const finalFolderPath =
+    serverResult?.folderPath ||
+    driveUploaded?.folderPath ||
+    `${cleanSchool} / Kelas ${cleanClass} / ${cleanName}`;
+
+  // Best-effort Firestore metadata record (strictly metadata, no image binary)
+  if (isVerifiedFirebaseUser()) {
+    saveSubmissionMetadataFirestore({
+      id: finalId,
+      studentName: cleanName,
+      school: cleanSchool,
+      studentClass: cleanClass,
       email: params.studentEmail,
+      chapterId: params.chapterId,
       chapterTitle: params.chapterTitle,
       questionNumber: params.questionNumber,
       workNotes: params.workNotes,
-      fileName: params.file?.name,
-      fileData: fileDataB64,
-    }),
-  });
-
-  if (!serverRes.ok) {
-    throw new Error('Gagal mengirim hasil pengerjaan ke arsip guru.');
-  }
-
-  const serverData = await serverRes.json();
-  if (!serverData?.ok) {
-    throw new Error(serverData?.error || 'Gagal menyimpan hasil pengerjaan.');
+      fileName: finalFileName,
+      hasAttachment: Boolean(preparedFile),
+      folderPath: finalFolderPath,
+      serverFilePath: serverResult?.relPath || '',
+    }).catch((err) => {
+      console.warn('Firestore submission metadata deferred:', err);
+    });
   }
 
   return {
-    fileId: serverData.fileId || `local-${Date.now()}`,
-    fileName: serverData.fileName || `soal_${params.questionNumber}.txt`,
-    folderPath: serverData.folderPath || `${params.studentSchool} / Kelas ${params.studentClass}`,
+    fileId: finalId,
+    fileName: finalFileName,
+    folderPath: finalFolderPath,
+    fileUrl: serverResult?.fileUrl,
+    storageType: driveUploaded && serverResult ? 'drive+server' : driveUploaded ? 'drive' : 'server',
   };
 }
 

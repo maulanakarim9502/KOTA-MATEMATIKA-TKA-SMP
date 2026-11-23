@@ -7,12 +7,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import ThreeCity from './components/ThreeCity';
 import WelcomeModal from './components/WelcomeModal';
 import StudyModal from './components/StudyModal';
+import TeacherSubmissionsModal from './components/TeacherSubmissionsModal';
 import {
   buildAccountKey,
   clearActiveSessionMeta,
-  getAccessToken,
   getCurrentFirebaseUser,
-  googleSignIn,
   loadActiveSessionProfile,
   loadBestStudentRecord,
   loadLocalStudentRecord,
@@ -39,7 +38,6 @@ import {
   Save,
   CheckCircle2,
   FolderCog,
-  X,
   Music,
   Maximize2,
   Minimize2,
@@ -327,7 +325,6 @@ export default function App() {
     } catch {
       // ignore storage quota
     }
-    setTeacherModalOpen(false);
   };
 
   const isTeacherAccount = isLoggedIn && studentEmail.toLowerCase() === TEACHER_EMAIL.toLowerCase();
@@ -515,15 +512,15 @@ export default function App() {
               </div>
             )}
 
-            {/* TEACHER-ONLY FOLDER DRIVE SETTING (HIDDEN FROM STUDENTS) */}
+            {/* TEACHER-ONLY WEB GURU & DRIVE ARCHIVE PORTAL (HIDDEN FROM STUDENTS) */}
             {isTeacherAccount && (
               <button
                 onClick={() => setTeacherModalOpen(true)}
                 className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-2 rounded-xl text-xs flex items-center space-x-1.5 shadow-md transition"
-                title="Pengaturan Folder Drive Guru"
+                title="Buka Web Guru: Lihat Foto & Tugas Siswa"
               >
                 <FolderCog className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Folder Drive Guru</span>
+                <span className="hidden lg:inline">Web Guru</span>
               </button>
             )}
 
@@ -617,7 +614,7 @@ export default function App() {
           {isTeacherAccount && (
             <button
               onClick={() => setTeacherModalOpen(true)}
-              title="Folder Drive Guru"
+              title="Web Guru (Foto & Tugas Siswa)"
               className="w-7 h-7 bg-amber-600/90 rounded-lg flex items-center justify-center text-white"
             >
               <FolderCog className="w-3.5 h-3.5" />
@@ -673,48 +670,14 @@ export default function App() {
         />
       )}
 
-      {/* TEACHER-ONLY DRIVE FOLDER CONFIG MODAL */}
+      {/* TEACHER-ONLY WEB GURU PORTAL (VIEW STUDENT PHOTOS + DRIVE SETTINGS) */}
       {teacherModalOpen && isTeacherAccount && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white text-slate-950 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-amber-200">
-            <div className="flex items-center justify-between">
-              <h3 className="font-extrabold text-base flex items-center space-x-2">
-                <FolderCog className="w-5 h-5 text-amber-600" />
-                <span>Folder Induk Google Drive Guru</span>
-              </h3>
-              <button
-                onClick={() => setTeacherModalOpen(false)}
-                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs text-slate-600">
-              Khusus akun guru ({TEACHER_EMAIL}). Tempelkan link atau ID folder induk Google Drive tujuan jika ingin mengarahkan hasil kerja siswa ke folder khusus (otomatis disusun per Sekolah → Kelas → Bab).
-            </p>
-            <input
-              type="text"
-              value={teacherFolderValue}
-              onChange={(e) => setTeacherFolderValue(e.target.value)}
-              placeholder="Contoh: https://drive.google.com/drive/folders/..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-950 bg-white focus:outline-none focus:border-amber-500"
-            />
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setTeacherModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-slate-200 text-slate-800 text-xs font-bold"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleSaveTeacherFolder}
-                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
-              >
-                Simpan Pengaturan
-              </button>
-            </div>
-          </div>
-        </div>
+        <TeacherSubmissionsModal
+          teacherFolderValue={teacherFolderValue}
+          onChangeTeacherFolder={setTeacherFolderValue}
+          onSaveTeacherFolder={handleSaveTeacherFolder}
+          onClose={() => setTeacherModalOpen(false)}
+        />
       )}
     </div>
   );

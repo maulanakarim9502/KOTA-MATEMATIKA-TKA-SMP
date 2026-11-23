@@ -8,6 +8,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   getDocFromServer,
   onSnapshot,
   query,
@@ -386,3 +387,105 @@ export function subscribeWorldPlayersFirestore(
     }
   );
 }
+
+export interface FirestoreSubmissionRecord {
+  id: string;
+  uid: string;
+  studentName: string;
+  school: string;
+  studentClass: string;
+  email: string;
+  chapterId: number;
+  chapterTitle: string;
+  questionNumber: number;
+  workNotes: string;
+  fileName: string;
+  hasAttachment: boolean;
+  folderPath: string;
+  serverFilePath: string;
+  createdAt: number;
+}
+
+export async function saveSubmissionMetadataFirestore(params: {
+  id: string;
+  studentName: string;
+  school: string;
+  studentClass: string;
+  email: string;
+  chapterId: number;
+  chapterTitle: string;
+  questionNumber: number;
+  workNotes: string;
+  fileName: string;
+  hasAttachment: boolean;
+  folderPath: string;
+  serverFilePath: string;
+}): Promise<void> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return;
+
+  const cleanId = (params.id || `sub_${Date.now()}`)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 128);
+  const path = `submissions/${cleanId}`;
+  try {
+    await setDoc(doc(db, 'submissions', cleanId), {
+      id: cleanId,
+      uid: user.uid,
+      studentName: sanitizeString(params.studentName, 40, 'Siswa'),
+      school: sanitizeString(params.school, 60, ''),
+      studentClass: sanitizeString(params.studentClass, 20, ''),
+      email: sanitizeString(params.email || user.email, 100, ''),
+      chapterId: Math.max(1, Math.min(11, Math.round(params.chapterId || 1))),
+      chapterTitle: sanitizeString(params.chapterTitle, 80, 'Bab'),
+      questionNumber: Math.max(1, Math.min(5, Math.round(params.questionNumber || 1))),
+      workNotes: (params.workNotes || '').trim().slice(0, 2000),
+      fileName: sanitizeString(params.fileName, 140, 'jawaban.txt'),
+      hasAttachment: Boolean(params.hasAttachment),
+      folderPath: sanitizeString(params.folderPath, 180, 'Arsip Guru'),
+      serverFilePath: (params.serverFilePath || '').slice(0, 260),
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function listStudentSubmissionsFirestore(): Promise<FirestoreSubmissionRecord[]> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return [];
+  const path = 'submissions';
+  try {
+    const isTeacher = user.email?.toLowerCase() === 'maulanakarim9502@gmail.com';
+    const q = isTeacher
+      ? query(collection(db, path))
+      : query(collection(db, path), where('uid', '==', user.uid));
+    const snap = await getDocs(q);
+    const out: FirestoreSubmissionRecord[] = [];
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      out.push({
+        id: String(d.id || docSnap.id),
+        uid: String(d.uid || ''),
+        studentName: String(d.studentName || 'Siswa'),
+        school: String(d.school || ''),
+        studentClass: String(d.studentClass || ''),
+        email: String(d.email || ''),
+        chapterId: Number(d.chapterId || 1),
+        chapterTitle: String(d.chapterTitle || ''),
+        questionNumber: Number(d.questionNumber || 1),
+        workNotes: String(d.workNotes || ''),
+        fileName: String(d.fileName || ''),
+        hasAttachment: Boolean(d.hasAttachment),
+        folderPath: String(d.folderPath || ''),
+        serverFilePath: String(d.serverFilePath || ''),
+        createdAt: d.createdAt instanceof Timestamp ? d.createdAt.toMillis() : Date.now(),
+      });
+    });
+    out.sort((a, b) => b.createdAt - a.createdAt);
+    return out;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+

@@ -84,7 +84,21 @@ async function startServer() {
     next();
   });
 
-  app.use(express.json({ limit: '128kb' }));
+  app.use(express.json({ limit: '20mb' }));
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err && err.type === 'entity.too.large') {
+      res.status(413).json({
+        ok: false,
+        error: 'Ukuran file terlalu besar (maksimal 15 MB). Coba pilih foto dengan ukuran lebih kecil.',
+      });
+      return;
+    }
+    if (err instanceof SyntaxError) {
+      res.status(400).json({ ok: false, error: 'Format data tidak valid.' });
+      return;
+    }
+    next(err);
+  });
 
   // Persistent per-student progress & profile store (.data/progress.json)
   interface ProgressEntry {
@@ -339,6 +353,53 @@ async function startServer() {
     res.json({ ok: true, record: updated });
   });
 
+  interface SubmissionRecord {
+    id: string;
+    studentName: string;
+    school: string;
+    studentClass: string;
+    email: string;
+    chapterId: number;
+    chapterTitle: string;
+    questionNumber: number;
+    workNotes: string;
+    fileName: string;
+    mimeType: string;
+    hasAttachment: boolean;
+    sizeBytes: number;
+    folderPath: string;
+    relPath: string;
+    fileUrl: string;
+    submittedAt: number;
+  }
+
+  const subsDir = path.resolve(dataDir, 'submissions');
+  const subsIndexPath = path.join(subsDir, 'index.json');
+  let submissionsList: SubmissionRecord[] = [];
+  try {
+    if (fs.existsSync(subsIndexPath)) {
+      const raw = fs.readFileSync(subsIndexPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        submissionsList = parsed;
+      }
+    }
+  } catch {
+    submissionsList = [];
+  }
+
+  const flushSubmissionsIndex = () => {
+    try {
+      fs.mkdirSync(subsDir, { recursive: true });
+      fs.writeFileSync(subsIndexPath, JSON.stringify(submissionsList), 'utf-8');
+    } catch (err) {
+      console.error('Failed to persist submissions index:', err);
+    }
+  };
+
+  const sanitizeFolderSegment = (val: string, fallback: string) =>
+    val.replace(/[^a-zA-Z0-9 _-]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 60) || fallback;
+
   app.post('/api/upload-solution', (req, res) => {
     try {
       const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
@@ -346,30 +407,71 @@ async function startServer() {
       const school = sanitizeText(body.school, 50, 'Sekolah Umum');
       const studentClass = sanitizeText(body.studentClass, 16, 'Kelas 9');
       const email = sanitizeText(body.email, 80, '');
-      const chapterTitle = sanitizeText(body.chapterTitle, 60, 'Bab');
-      const questionNumber = Number(body.questionNumber) || 1;
+      const chapterId = Math.max(1, Math.min(11, Math.round(Number(body.chapterId) || 1)));
+      const chapterTitle = sanitizeText(body.chapterTitle, 70, `Bab ${chapterId}`);
+      const questionNumber = Math.max(1, Math.min(5, Math.round(Number(body.questionNumber) || 1)));
       const workNotes = sanitizeText(body.workNotes, 2000, '');
-      const fileName = sanitizeText(body.fileName, 100, `soal_${questionNumber}.txt`);
+
+      const rawFileName = typeof body.fileName === 'string' ? path.basename(body.fileName) : '';
+      const safeOriginalName = rawFileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
       const fileDataB64 = typeof body.fileData === 'string' ? body.fileData : '';
 
-      const subsDir = path.resolve(import.meta.dirname, '.data', 'submissions');
-      const cleanSchool = school.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
-      const cleanClass = studentClass.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
-      const cleanStudent = studentName.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
-      const cleanChapter = chapterTitle.replace(/[^a-zA-Z0-9_\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF -]/g, '_');
+      const cleanSchool = sanitizeFolderSegment(school, 'Sekolah Umum');
+      const cleanClass = sanitizeFolderSegment(studentClass, 'Kelas 9');
+      const cleanStudent = sanitizeFolderSegment(studentName, 'Siswa');
+      const cleanChapter = sanitizeFolderSegment(chapterTitle, `Bab ${chapterId}`);
 
       const targetDir = path.join(subsDir, cleanSchool, cleanClass, cleanStudent, cleanChapter);
       fs.mkdirSync(targetDir, { recursive: true });
 
-      const timestamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-      const finalFileName = `${timestamp}_${fileName}`;
-      const fullFilePath = path.join(targetDir, finalFileName);
+      const now = Date.now();
+      const timestamp = new Date(now).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const submissionId = `sub_${now}_${crypto.randomUUID().slice(0, 8)}`;
 
-      if (fileDataB64) {
-        const base64Clean = fileDataB64.includes(',') ? fileDataB64.split(',')[1] : fileDataB64;
+      let mimeType = 'text/plain';
+      let hasAttachment = false;
+      let finalFileName = `${timestamp}_soal_${questionNumber}.txt`;
+      let sizeBytes = 0;
+
+      if (fileDataB64 && fileDataB64.length > 10) {
+        hasAttachment = true;
+        const dataUrlMatch = fileDataB64.match(/^data:([^;]+);base64,(.+)$/);
+        let base64Clean = fileDataB64;
+        if (dataUrlMatch) {
+          mimeType = dataUrlMatch[1];
+          base64Clean = dataUrlMatch[2];
+        } else if (fileDataB64.includes(',')) {
+          base64Clean = fileDataB64.split(',')[1];
+        }
+
+        const extFromMime = mimeType.includes('png')
+          ? 'png'
+          : mimeType.includes('webp')
+            ? 'webp'
+            : mimeType.includes('pdf')
+              ? 'pdf'
+              : 'jpg';
+        const chosenName = safeOriginalName || `foto_soal_${questionNumber}.${extFromMime}`;
+        finalFileName = `${timestamp}_${chosenName}`;
+        const fullFilePath = path.join(targetDir, finalFileName);
         const buffer = Buffer.from(base64Clean, 'base64');
+        if (buffer.length === 0) {
+          res.status(400).json({ ok: false, error: 'Data foto kosong atau rusak.' });
+          return;
+        }
         fs.writeFileSync(fullFilePath, buffer);
+        sizeBytes = buffer.length;
+
+        if (workNotes) {
+          const notePath = path.join(targetDir, `${timestamp}_catatan_soal_${questionNumber}.txt`);
+          fs.writeFileSync(
+            notePath,
+            `Siswa: ${studentName} (${studentClass} - ${school})\nSoal: ${chapterTitle} - Soal ${questionNumber}\nCatatan:\n${workNotes}\n`,
+            'utf-8'
+          );
+        }
       } else {
+        const fullFilePath = path.join(targetDir, finalFileName);
         const textContent = [
           `HASIL CARA PENGERJAAN TKA MATEMATIKA SMP (MAULANA KARIM)`,
           `======================================================`,
@@ -379,24 +481,81 @@ async function startServer() {
           `Email        : ${email}`,
           `Bab          : ${chapterTitle}`,
           `Nomor Soal   : Soal ${questionNumber}`,
-          `Waktu Kirim  : ${new Date().toLocaleString('id-ID')}`,
+          `Waktu Kirim  : ${new Date(now).toLocaleString('id-ID')}`,
           ``,
           `Catatan Langkah Pengerjaan:`,
           workNotes || '(Tidak ada catatan teks)',
         ].join('\n');
         fs.writeFileSync(fullFilePath, textContent, 'utf-8');
+        sizeBytes = Buffer.byteLength(textContent, 'utf-8');
       }
+
+      const fullSavedPath = path.join(targetDir, finalFileName);
+      const relPath = path.relative(subsDir, fullSavedPath).split(path.sep).join('/');
+      const fileUrl = `/api/submissions/file?path=${encodeURIComponent(relPath)}`;
+      const folderPath = `${cleanSchool} / Kelas ${cleanClass} / ${cleanStudent} / ${cleanChapter}`;
+
+      const record: SubmissionRecord = {
+        id: submissionId,
+        studentName,
+        school: cleanSchool,
+        studentClass: cleanClass,
+        email,
+        chapterId,
+        chapterTitle: cleanChapter,
+        questionNumber,
+        workNotes,
+        fileName: finalFileName,
+        mimeType,
+        hasAttachment,
+        sizeBytes,
+        folderPath,
+        relPath,
+        fileUrl,
+        submittedAt: now,
+      };
+      submissionsList.unshift(record);
+      if (submissionsList.length > 500) {
+        submissionsList = submissionsList.slice(0, 500);
+      }
+      flushSubmissionsIndex();
 
       res.json({
         ok: true,
-        fileId: `local-${Date.now()}`,
+        id: submissionId,
+        fileId: submissionId,
         fileName: finalFileName,
-        folderPath: `${school} / Kelas ${studentClass} / ${cleanChapter}`,
+        mimeType,
+        sizeBytes,
+        folderPath,
+        relPath,
+        fileUrl,
       });
     } catch (err) {
       console.error('Failed to save submission on server:', err);
-      res.status(500).json({ ok: false, error: 'Gagal menyimpan file ke server.' });
+      res.status(500).json({ ok: false, error: 'Gagal menyimpan file ke server web guru.' });
     }
+  });
+
+  app.get('/api/submissions', (_req, res) => {
+    res.json({
+      ok: true,
+      submissions: submissionsList,
+    });
+  });
+
+  app.get('/api/submissions/file', (req, res) => {
+    const rawRel = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!rawRel) {
+      res.status(400).json({ ok: false, error: 'Missing path' });
+      return;
+    }
+    const resolved = path.resolve(subsDir, rawRel);
+    if (!resolved.startsWith(subsDir + path.sep) || !fs.existsSync(resolved)) {
+      res.status(404).json({ ok: false, error: 'File tidak ditemukan' });
+      return;
+    }
+    res.sendFile(resolved);
   });
 
   const wss = new WebSocketServer({ server, path: '/ws/city' });

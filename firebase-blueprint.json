@@ -73,6 +73,45 @@
         "isOnline",
         "updatedAt"
       ]
+    },
+    "StudentSubmission": {
+      "title": "StudentSubmission",
+      "description": "Metadata record of student solution photo/notes submitted to the teacher archive (no large binary blob).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "school": { "type": "string", "maxLength": 60 },
+        "studentClass": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 100 },
+        "chapterId": { "type": "integer" },
+        "chapterTitle": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "questionNumber": { "type": "integer" },
+        "workNotes": { "type": "string", "maxLength": 2000 },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "hasAttachment": { "type": "boolean" },
+        "folderPath": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "serverFilePath": { "type": "string", "maxLength": 260 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "uid",
+        "studentName",
+        "school",
+        "studentClass",
+        "email",
+        "chapterId",
+        "chapterTitle",
+        "questionNumber",
+        "workNotes",
+        "fileName",
+        "hasAttachment",
+        "folderPath",
+        "serverFilePath",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -83,6 +122,10 @@
     "/worldPlayers/{playerId}": {
       "schema": { "$ref": "#/entities/WorldPlayer" },
       "description": "Real-time multiplayer player avatars in the shared city map."
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/StudentSubmission" },
+      "description": "Student solution submission logs visible to the student owner and teacher admin."
     }
   }
 }

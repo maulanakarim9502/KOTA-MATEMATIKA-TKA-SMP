@@ -3,14 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CHAPTERS_DATA, QUESTIONS_DATA, ChapterModule, Question } from '../data/tkaData';
 import InteriorRoomShowcase from './InteriorRoomShowcase';
-import GoogleSignInButton from './GoogleSignInButton';
 import {
-  getAccessToken,
-  googleSignIn,
-  initAuth,
   uploadSolutionToDrive,
   UploadedDriveResult,
 } from '../services/googleDriveService';
@@ -32,6 +28,8 @@ import {
   AlertTriangle,
   Loader2,
   ShieldCheck,
+  Image as ImageIcon,
+  Trash2,
 } from 'lucide-react';
 
 interface StudyModalProps {
@@ -64,7 +62,9 @@ export default function StudyModal({
 
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
   const [selectedVideoUrl, setSelectedVideoUrl] = useState<string>(chapter.videoUrls[0]?.url || '');
-  const [isVideoWatched, setIsVideoWatched] = useState<boolean>(false);
+  const [isVideoWatched, setIsVideoWatched] = useState<boolean>(() =>
+    cQuestions.some((q) => Boolean(userProgress[q.id]?.solved))
+  );
 
   const [userAnswer, setUserAnswer] = useState<string>('');
   const [hintLevel, setHintLevel] = useState<number>(0);
@@ -75,16 +75,36 @@ export default function StudyModal({
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isKickingOut, setIsKickingOut] = useState<boolean>(false);
 
-  // Google Drive Work Upload states per question
+  // Web Guru & Drive Work Upload states per question
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
   const [workNotes, setWorkNotes] = useState<string>('');
-  const [confirmUploadOpen, setConfirmUploadOpen] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
   const [uploadedByQuestion, setUploadedByQuestion] = useState<Record<number, UploadedDriveResult>>({});
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentQ: Question = cQuestions[currentQIndex] || cQuestions[0];
   const solvedCountInChapter = cQuestions.filter((q) => userProgress[q.id]?.solved).length;
+
+  useEffect(() => {
+    if (!selectedFile || !selectedFile.type.startsWith('image/')) {
+      setPreviewUrl('');
+      return;
+    }
+    const url = URL.createObjectURL(selectedFile);
+    setPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [selectedFile]);
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     setHintLevel(0);
@@ -94,24 +114,21 @@ export default function StudyModal({
     setFeedbackMsg('');
     setUserAnswer('');
     setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     setWorkNotes('');
     setUploadError('');
-    setConfirmUploadOpen(false);
   }, [currentQ]);
 
-  const handleRequestUpload = () => {
+  const handleDirectUpload = async () => {
     setUploadError('');
     if (!selectedFile && !workNotes.trim()) {
       setUploadError('Silakan pilih foto/PDF cara pengerjaan atau tulis langkah pengerjaanmu terlebih dahulu.');
       return;
     }
-    setConfirmUploadOpen(true);
-  };
 
-  const handleConfirmUpload = async () => {
-    setConfirmUploadOpen(false);
     setIsUploading(true);
-    setUploadError('');
     try {
       let teacherFolderId = '';
       try {
@@ -133,13 +150,13 @@ export default function StudyModal({
         teacherFolderInput: teacherFolderId,
       });
       setUploadedByQuestion((prev) => ({ ...prev, [currentQ.id]: res }));
-      setSelectedFile(null);
+      clearSelectedFile();
       setWorkNotes('');
       speakText(
-        `Mantap ${studentName}! Cara pengerjaan soal nomor ${currentQ.numberInChapter} sudah tercatat rapi dan terkirim ke arsip Google Drive guru.`
+        `Mantap ${studentName}! Foto dan cara pengerjaan soal nomor ${currentQ.numberInChapter} berhasil terkirim rapi ke web guru.`
       );
     } catch (err: any) {
-      setUploadError(err?.message || 'Gagal mengunggah hasil pengerjaan.');
+      setUploadError(err?.message || 'Gagal mengunggah hasil pengerjaan ke web guru.');
     } finally {
       setIsUploading(false);
     }
@@ -433,17 +450,17 @@ export default function StudyModal({
                     })}
               </div>
 
-              {/* UPLOAD CARA PENGERJAAN PER SOAL KE GOOGLE DRIVE GURU (TANPA MENAMPILKAN LINK KE SISWA) */}
+              {/* UPLOAD CARA PENGERJAAN PER SOAL KE WEB GURU */}
               <div className="bg-blue-50/70 border border-blue-200 rounded-3xl p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center space-x-2">
                     <UploadCloud className="w-5 h-5 text-blue-600" />
                     <div>
                       <h5 className="font-bold text-slate-900 text-sm">
-                        Upload Hasil Cara Mengerjakan (Soal {currentQ.numberInChapter})
+                        Kirim Foto Cara Mengerjakan ke Web Guru (Soal {currentQ.numberInChapter})
                       </h5>
                       <p className="text-[11px] text-slate-700">
-                        Tercatat rapi untuk guru: <strong className="text-slate-950">{studentSchool} • Kelas {studentClass} • {studentName}</strong>
+                        Tercatat rapi untuk guru: <strong className="text-slate-950">{studentSchool || 'SMP'} • Kelas {studentClass || '-'} • {studentName}</strong>
                       </p>
                     </div>
                   </div>
@@ -451,33 +468,80 @@ export default function StudyModal({
                   {currentUploaded && (
                     <div className="bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center space-x-1.5 shadow">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      <span>Terkirim ke Google Drive Guru ({currentUploaded.folderPath})</span>
+                      <span>Terkirim ke Web Guru ({currentUploaded.folderPath})</span>
                     </div>
                   )}
                 </div>
 
+                {currentUploaded && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+                    <div>
+                      <span className="font-bold">File tersimpan:</span> {currentUploaded.fileName}
+                    </div>
+                    {currentUploaded.fileUrl && (
+                      <a
+                        href={currentUploaded.fileUrl}
+                        download={currentUploaded.fileName}
+                        className="font-bold text-emerald-700 hover:underline flex items-center space-x-1"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Unduh Bukti Terkirim</span>
+                      </a>
+                    )}
+                  </div>
+                )}
 
-
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <label className="text-[11px] font-bold text-slate-800 flex items-center">
-                    <FileText className="w-3.5 h-3.5 mr-1 text-blue-600" /> Foto / Scan PDF Cara Pengerjaan
+                    <FileText className="w-3.5 h-3.5 mr-1 text-blue-600" /> Foto / Scan PDF Cara Pengerjaan (Otomatis dikompres)
                   </label>
                   <input
+                    ref={fileInputRef}
                     type="file"
                     accept="image/*,.pdf"
-                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                    onChange={(e) => {
+                      setUploadError('');
+                      setSelectedFile(e.target.files?.[0] || null);
+                    }}
                     className="w-full text-xs text-slate-900 bg-white border border-slate-300 rounded-xl p-2 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-bold"
                   />
                   {selectedFile && (
-                    <p className="text-[11px] text-emerald-700 font-semibold">
-                      File siap dikirim: {selectedFile.name}
-                    </p>
+                    <div className="bg-white border border-emerald-200 rounded-2xl p-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center space-x-3 min-w-0">
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt="Pratinjau foto pengerjaan"
+                            className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0">
+                            <ImageIcon className="w-6 h-6 text-blue-600" />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900 truncate">{selectedFile.name}</p>
+                          <p className="text-[11px] text-emerald-700 font-semibold">
+                            Siap dikirim ({Math.max(1, Math.round(selectedFile.size / 1024))} KB)
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={clearSelectedFile}
+                        disabled={isUploading}
+                        className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 shrink-0"
+                        title="Hapus pilihan file"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   )}
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-[11px] font-bold text-slate-800">
-                    Catatan Langkah Pengerjaan (Dikirim bersama file / sebagai dokumen cara kerja):
+                    Catatan Langkah Pengerjaan (Dikirim bersama foto / sebagai teks cara kerja):
                   </label>
                   <textarea
                     rows={2}
@@ -490,7 +554,7 @@ export default function StudyModal({
 
                 <div className="flex items-center space-x-1.5 text-[11px] text-slate-600">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>File otomatis tersimpan aman di folder Drive guru dan langsung diperiksa oleh guru.</span>
+                  <span>Langsung terkirim otomatis ke Portal Web Guru tanpa perlu login ulang.</span>
                 </div>
 
                 {uploadError && (
@@ -499,51 +563,23 @@ export default function StudyModal({
                   </div>
                 )}
 
-                {confirmUploadOpen ? (
-                  <div className="bg-amber-50 border border-amber-300 p-4 rounded-2xl space-y-3">
-                    <p className="text-xs font-bold text-amber-950">
-                      Konfirmasi Pengiriman ke Google Drive Guru:
-                    </p>
-                    <p className="text-xs text-amber-900">
-                      Kirim hasil cara pengerjaan <strong>Soal {currentQ.numberInChapter}</strong> atas nama{' '}
-                      <strong>{studentName} ({studentClass} - {studentSchool})</strong> ke arsip Google Drive guru?
-                    </p>
-                    <div className="flex space-x-2">
-                      <button
-                        type="button"
-                        onClick={handleConfirmUpload}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs"
-                      >
-                        Ya, Kirim ke Drive Guru
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmUploadOpen(false)}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-4 py-2 rounded-xl text-xs"
-                      >
-                        Batal
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleRequestUpload}
-                    disabled={isUploading}
-                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow transition"
-                  >
-                    {isUploading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <UploadCloud className="w-4 h-4" />
-                    )}
-                    <span>
-                      {isUploading
-                        ? 'Mengunggah ke Google Drive...'
-                        : `Kirim Hasil Kerja Soal ${currentQ.numberInChapter} ke Google Drive Guru`}
-                    </span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleDirectUpload}
+                  disabled={isUploading}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center space-x-2 shadow transition"
+                >
+                  {isUploading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-4 h-4" />
+                  )}
+                  <span>
+                    {isUploading
+                      ? 'Mengompres & Mengirim ke Web Guru...'
+                      : `Kirim Foto / Cara Kerja Soal ${currentQ.numberInChapter} ke Web Guru`}
+                  </span>
+                </button>
               </div>
 
               {/* ACTIONS & FEEDBACK */}
